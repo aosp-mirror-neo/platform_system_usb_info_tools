@@ -22,9 +22,10 @@ use std::io::Cursor;
 use tempfile::tempdir;
 
 use crate::typec_class_utils::{
-    get_pd_revision, parse_dirs_and_execute, print_vdo, read_vdo, OutputWriter, PORT_REGEX,
+    get_partner_product_type, get_pd_revision, parse_dirs_and_execute, print_vdo, read_vdo,
+    OutputWriter, PORT_REGEX,
 };
-use crate::usb_pd_utils::{pd30_data, PDRev};
+use crate::usb_pd_utils::{pd30_data, PdRev, PortType, ProductType};
 
 /// Creates a temporary hierarchy of directories and files with content.
 /// The dir_paths_files_content array param expects the following format:
@@ -176,18 +177,22 @@ fn test_print_vdo() {
 
 #[test]
 fn test_read_vdo() {
-    let temp_dir_path = create_full_typec_connector_class_temp_file_hierarchy();
+    let temp_dir_path =
+        create_temp_dir_with_dirs_files_content(&[("identity", &[("id_header", "0x4c4018d1")])]);
 
-    let vdo = read_vdo(&temp_dir_path.join("port0/port0-partner/identity/id_header"))
-        .expect("read_vdo returned an error");
+    let vdo =
+        read_vdo(&temp_dir_path.join("identity/id_header")).expect("read_vdo returned an error");
     assert_eq!(vdo, 0x4c4018d1);
 }
 
 #[test]
 fn test_get_pd_revision() {
-    let temp_dir_path = create_full_typec_connector_class_temp_file_hierarchy();
-    let pd_rev = get_pd_revision(&temp_dir_path.join("port0/port0-partner"));
-    assert_eq!(pd_rev, PDRev::PD30);
+    let temp_dir_path = create_temp_dir_with_dirs_files_content(&[(
+        "port0-partner",
+        &[("usb_power_delivery_revision", "3.0")],
+    )]);
+    let pd_rev = get_pd_revision(&temp_dir_path.join("port0-partner"));
+    assert_eq!(pd_rev, PdRev::Pd30);
 }
 
 #[test]
@@ -211,4 +216,30 @@ port1
         &String::from_utf8(outp_buffer.into_inner()).expect("Cannot decode output buffer"),
         expected_outp
     )
+}
+
+#[test]
+fn test_get_partner_product_type_pd30_ufp() {
+    let temp_dir_path =
+        create_temp_dir_with_dirs_files_content(&[("identity", &[("id_header", "0x4c4018d1")])]);
+    let prod_type = get_partner_product_type(&temp_dir_path, PdRev::Pd30);
+
+    assert_eq!(prod_type, ProductType::Port((PortType::Ufp, PdRev::Pd30)));
+}
+
+#[test]
+fn test_get_partner_product_type_pd31_drd() {
+    let temp_dir_path =
+        create_temp_dir_with_dirs_files_content(&[("identity", &[("id_header", "0x08800000")])]);
+    let prod_type = get_partner_product_type(&temp_dir_path, PdRev::Pd31);
+
+    assert_eq!(prod_type, ProductType::Port((PortType::Drd, PdRev::Pd31)));
+}
+
+#[test]
+fn test_get_partner_product_type_other() {
+    let temp_dir_path = create_temp_dir_with_dirs_files_content(&[]);
+    let prod_type = get_partner_product_type(&temp_dir_path, PdRev::Pd20);
+
+    assert_eq!(prod_type, ProductType::Other);
 }

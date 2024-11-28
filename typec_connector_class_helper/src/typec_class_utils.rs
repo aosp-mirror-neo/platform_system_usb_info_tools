@@ -14,7 +14,7 @@
 
 //! typec_class_utils
 
-use crate::usb_pd_utils::{pd20_data, pd30_data, pd31_data, PDRev, VdoField};
+use crate::usb_pd_utils::*;
 use anyhow::{bail, Context, Result};
 use log::warn;
 use regex::Regex;
@@ -27,6 +27,8 @@ use std::{
 pub const TYPEC_SYSFS_PATH: &str = "/sys/class/typec";
 
 pub const PORT_REGEX: &str = "^port[0-9]+$";
+
+pub const INDENT_STEP: usize = 2;
 
 const ERR_READ_DIR: &str = "Failed to iterate over files in directory";
 const ERR_READ_FILE: &str = "Cannot read file from path";
@@ -78,9 +80,9 @@ impl<W: Write> OutputWriter<W> {
         self.print_str_indent(dir_name)?;
 
         for path in get_sorted_paths_from_dir(dir_path, |path| path.is_file())? {
-            self.indent += 2;
+            self.indent += INDENT_STEP;
             let _ = self.print_file_formatted(&path).inspect_err(|err| warn!("{:?}: {err}", path));
-            self.indent -= 2;
+            self.indent -= INDENT_STEP;
         }
 
         Ok(())
@@ -145,44 +147,143 @@ pub fn print_partner_identity<W: Write>(
 
     let _ = out_writer.print_str_indent("identity").inspect_err(|err| warn!("{:#}", err));
 
-    out_writer.indent += 2;
-    let filename_vdo_fields_arr: &[(&str, &[VdoField]); 3] = match get_pd_revision(partner_path) {
-        PDRev::PD20 => &[
+    out_writer.indent += INDENT_STEP;
+
+    let pd_rev = get_pd_revision(partner_path);
+
+    let filename_vdo_fields_arr: [(&str, &[VdoField]); 3] = match pd_rev {
+        PdRev::Pd20 => [
             ("id_header", pd20_data::ID_HEADER_VDO),
             ("cert_stat", pd20_data::CERT_STAT_VDO),
             ("product", pd20_data::PRODUCT_VDO),
         ],
-        PDRev::PD30 => &[
+        PdRev::Pd30 => [
             ("id_header", pd30_data::ID_HEADER_VDO),
             ("cert_stat", pd30_data::CERT_STAT_VDO),
             ("product", pd30_data::PRODUCT_VDO),
         ],
-        PDRev::PD31 => &[
+        PdRev::Pd31 => [
             ("id_header", pd31_data::ID_HEADER_VDO),
             ("cert_stat", pd31_data::CERT_STAT_VDO),
             ("product", pd31_data::PRODUCT_VDO),
         ],
-        PDRev::None => &[("id_header", &[]), ("cert_stat", &[]), ("product", &[])],
+        PdRev::None => [("id_header", &[]), ("cert_stat", &[]), ("product", &[])],
     };
-    print_decoded_vdos_from_files(&mut identity_path_buf, filename_vdo_fields_arr, out_writer);
+    print_decoded_vdos_from_files(&mut identity_path_buf, &filename_vdo_fields_arr, out_writer);
 
-    out_writer.indent -= 2;
+    let vdo_fields_arr: [&[VdoField]; 3] = match get_partner_product_type(partner_path, pd_rev) {
+        ProductType::Ama(PdRev::Pd20) => [pd20_data::AMA_VDO, &[], &[]],
+        ProductType::Vpd(PdRev::Pd30) => [pd30_data::VPD_VDO, &[], &[]],
+        ProductType::Ama(PdRev::Pd30) => [pd30_data::AMA_VDO, &[], &[]],
+        ProductType::Port((PortType::Ufp, PdRev::Pd30)) => {
+            [pd30_data::UFP_VDO1, pd30_data::UFP_VDO2, &[]]
+        }
+        ProductType::Port((PortType::Dfp, PdRev::Pd30)) => [pd30_data::DFP_VDO, &[], &[]],
+        ProductType::Port((PortType::Drd, PdRev::Pd30)) => {
+            [pd30_data::UFP_VDO1, pd30_data::UFP_VDO2, pd30_data::DFP_VDO]
+        }
+        ProductType::Port((PortType::Ufp, PdRev::Pd31)) => [pd31_data::UFP_VDO, &[], &[]],
+        ProductType::Port((PortType::Dfp, PdRev::Pd31)) => [pd31_data::DFP_VDO, &[], &[]],
+        ProductType::Port((PortType::Drd, PdRev::Pd31)) => {
+            [pd31_data::UFP_VDO, &[], pd31_data::DFP_VDO]
+        }
+        _ => [&[], &[], &[]],
+    };
+    let filenames = ["product_type_vdo1", "product_type_vdo2", "product_type_vdo3"];
+    let filename_vdo_fields_arr: Vec<(&str, &[VdoField])> =
+        filenames.into_iter().zip(vdo_fields_arr).collect();
+    print_decoded_vdos_from_files(&mut identity_path_buf, &filename_vdo_fields_arr, out_writer);
+
+    out_writer.indent -= INDENT_STEP;
 
     Ok(())
 }
 
 /// Reads the usb_power_delivery_revision file in a given directory
-/// and returns a PDRev enum noting the supported PD Revision.
-pub fn get_pd_revision(dir_path: &Path) -> PDRev {
+/// and returns a PdRev enum noting the supported PD Revision.
+pub fn get_pd_revision(dir_path: &Path) -> PdRev {
     let pd_path: PathBuf = dir_path.join("usb_power_delivery_revision");
     let pd_revision_str = fs::read_to_string(&pd_path)
         .inspect_err(|err| warn!("{ERR_READ_FILE} {:?} {:#}", &pd_path, err))
         .unwrap_or_default();
     match pd_revision_str.trim_ascii() {
-        "2.0" => PDRev::PD20,
-        "3.0" => PDRev::PD30,
-        "3.1" => PDRev::PD31,
-        _ => PDRev::None,
+        "2.0" => PdRev::Pd20,
+        "3.0" => PdRev::Pd30,
+        "3.1" => PdRev::Pd31,
+        _ => PdRev::None,
+    }
+}
+
+/// Uses the id_header VDO and USB PD revision to decode what type of device is being parsed.
+/// In case of failure returns ProductType::Other.
+pub fn get_partner_product_type(partner_dir: &Path, pd_rev: PdRev) -> ProductType {
+    let id_header_vdo_path: PathBuf = partner_dir.join("identity").join("id_header");
+
+    let id_header_vdo = match read_vdo(&id_header_vdo_path) {
+        Ok(vdo) => vdo,
+        Err(err) => {
+            warn!("{:#}", err);
+            return ProductType::Other;
+        }
+    };
+
+    match pd_rev {
+        PdRev::Pd20 => {
+            // Alternate Mode Adapter (AMA) is the only partner product type in the
+            // USB PD 2.0 specification.
+            match id_header_vdo & UFP_PRODUCT_TYPE_MASK {
+                pd20_data::AMA_COMP => ProductType::Ama(PdRev::Pd20),
+                _ => ProductType::Other,
+            }
+        }
+        PdRev::Pd30 => {
+            // In USB PD 3.0 a partner can be an upstream facing port (UFP),
+            // downstream facing port (DFP), or a dual-role data port (DRD).
+            // Information about UFP/DFP are in different fields, so they are checked
+            // separately then compared to determine a partner's product type.
+            // Separate from UFP/DFP, they can support AMA/VPD as a UFP type.
+
+            let ufp_supported = match id_header_vdo & UFP_PRODUCT_TYPE_MASK {
+                pd30_data::HUB_COMP => true,
+                pd30_data::PERIPHERAL_COMP => true,
+                pd30_data::AMA_COMP => return ProductType::Ama(PdRev::Pd30),
+                pd30_data::VPD_COMP => return ProductType::Vpd(PdRev::Pd30),
+                _ => false,
+            };
+
+            let dfp_supported = matches!(
+                id_header_vdo & DFP_PRODUCT_TYPE_MASK,
+                pd30_data::DFP_HUB_COMP | pd30_data::DFP_HOST_COMP | pd30_data::POWER_BRICK_COMP
+            );
+
+            match (ufp_supported, dfp_supported) {
+                (true, true) => ProductType::Port((PortType::Drd, PdRev::Pd30)),
+                (true, false) => ProductType::Port((PortType::Ufp, PdRev::Pd30)),
+                (false, true) => ProductType::Port((PortType::Dfp, PdRev::Pd30)),
+                _ => ProductType::Other,
+            }
+        }
+        PdRev::Pd31 => {
+            // Similar to USB PD 3.0, USB PD 3.1 can have a partner which is both UFP
+            // and DFP (DRD). AMA product type is no longer present in PD 3.1.
+            let ufp_supported = matches!(
+                id_header_vdo & UFP_PRODUCT_TYPE_MASK,
+                pd31_data::HUB_COMP | pd31_data::PERIPHERAL_COMP
+            );
+
+            let dfp_supported = matches!(
+                id_header_vdo & DFP_PRODUCT_TYPE_MASK,
+                pd31_data::DFP_HOST_COMP | pd31_data::DFP_HUB_COMP | pd31_data::POWER_BRICK_COMP
+            );
+
+            match (ufp_supported, dfp_supported) {
+                (true, true) => ProductType::Port((PortType::Drd, PdRev::Pd31)),
+                (true, false) => ProductType::Port((PortType::Ufp, PdRev::Pd31)),
+                (false, true) => ProductType::Port((PortType::Dfp, PdRev::Pd31)),
+                _ => ProductType::Other,
+            }
+        }
+        _ => ProductType::Other,
     }
 }
 
@@ -195,13 +296,13 @@ pub fn print_vdo<W: Write>(
     let vdo = read_vdo(vdo_path)?;
     let vdo_str = format!("{}: 0x{:x}", get_path_basename(vdo_path)?, vdo);
     let _ = out_writer.print_str_indent(&vdo_str).inspect_err(|err| warn!("{:#}", err));
-    out_writer.indent += 2;
+    out_writer.indent += INDENT_STEP;
     for vdo_field in vdo_description {
         let _ = out_writer
             .print_str_indent(&vdo_field.decode_vdo(vdo))
             .inspect_err(|err| warn!("{:#}", err)); // log error but continue iterating.
     }
-    out_writer.indent -= 2;
+    out_writer.indent -= INDENT_STEP;
     Ok(())
 }
 
@@ -228,19 +329,19 @@ pub fn print_partner<W: Write>(port_path: &Path, out_writer: &mut OutputWriter<W
 
     let _ = out_writer.print_dir_files(&partner_path_buf).inspect_err(|err| warn!("{:#}", err));
 
-    out_writer.indent += 2;
+    out_writer.indent += INDENT_STEP;
     let _ =
         print_partner_identity(&partner_path_buf, out_writer).inspect_err(|err| warn!("{:#}", err));
-    out_writer.indent -= 2;
+    out_writer.indent -= INDENT_STEP;
     Ok(())
 }
 
 /// Prints relevant type-c connector class information for the port located at the sysfs path "port_path".
 pub fn print_port_info<W: Write>(port_path: &Path, out_writer: &mut OutputWriter<W>) {
     let _ = out_writer.print_dir_files(port_path).inspect_err(|err| warn!("{:#}", err));
-    out_writer.indent += 2;
+    out_writer.indent += INDENT_STEP;
     let _ = print_partner(port_path, out_writer).inspect_err(|err| warn!("{:#}", err));
-    out_writer.indent -= 2;
+    out_writer.indent -= INDENT_STEP;
 }
 
 /// Looks at subdirectories of a given directory and executes a passed function on directories matching a given regular expression.
