@@ -27,6 +27,12 @@ use std::{
 pub const TYPEC_SYSFS_PATH: &str = "/sys/class/typec";
 
 pub const PORT_REGEX: &str = "^port[0-9]+$";
+pub const PARTNER_ALT_MODE_REGEX: &str = "^port[0-9]+-partner\\.[0-9]+$";
+pub const MODE_REGEX: &str = "^mode[0-9]+$";
+pub const PARTNER_PDO_REGEX: &str = "^pd[0-9]+$";
+pub const PDO_CAPABILITIES_REGEX: &str = "^(sink|source)-capabilities$";
+pub const PDO_TYPE_REGEX: &str =
+    "^[0-9]+:(battery|fixed_supply|programmable_supply|variable_supply)$";
 
 pub const INDENT_STEP: usize = 2;
 
@@ -318,6 +324,63 @@ pub fn read_vdo(vdo_path: &Path) -> Result<u32> {
     Ok(vdo)
 }
 
+// Prints the immediate files in an alternate mode directory, then prints the files in each mode subdirectory.
+pub fn print_alt_mode<W: Write>(alt_mode_dir_path: &Path, out_writer: &mut OutputWriter<W>) {
+    if !(alt_mode_dir_path.is_dir() | alt_mode_dir_path.is_symlink()) {
+        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", alt_mode_dir_path);
+        return;
+    }
+
+    let _ = out_writer.print_dir_files(alt_mode_dir_path).inspect_err(|err| warn!("{:#}", err));
+    out_writer.indent += INDENT_STEP;
+    let _ = parse_dirs_and_execute(
+        alt_mode_dir_path,
+        out_writer,
+        MODE_REGEX,
+        |path: &Path, out_writer: &mut OutputWriter<W>| {
+            let _ = out_writer.print_dir_files(path).inspect_err(|err| warn!("{:#}", err));
+        },
+    )
+    .inspect_err(|err| warn!("{:#}", err));
+    out_writer.indent -= INDENT_STEP;
+}
+
+// Prints detailed information about the PDOs given at capabilities_dir_path, including available voltages and currents.
+pub fn print_pdo_capabilities<W: Write>(capabilities: &Path, out_writer: &mut OutputWriter<W>) {
+    let _ = out_writer.print_dir_files(capabilities).inspect_err(|err| warn!("{:#}", err));
+    out_writer.indent += INDENT_STEP;
+    let _ = parse_dirs_and_execute(
+        capabilities,
+        out_writer,
+        PDO_TYPE_REGEX,
+        |path: &Path, out_writer: &mut OutputWriter<W>| {
+            let _ = out_writer.print_dir_files(path).inspect_err(|err| warn!("{:#}", err));
+        },
+    )
+    .inspect_err(|err| warn!("{:#}", err));
+    out_writer.indent -= INDENT_STEP;
+}
+
+// Prints the immediate files in a PDO data directory, then call
+// print_pdo_capabilities to print more detailed PDO information.
+pub fn print_pdos<W: Write>(pdo_dir_path: &Path, out_writer: &mut OutputWriter<W>) {
+    if !(pdo_dir_path.is_dir() | pdo_dir_path.is_symlink()) {
+        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", pdo_dir_path);
+        return;
+    }
+
+    let _ = out_writer.print_dir_files(pdo_dir_path).inspect_err(|err| warn!("{:#}", err));
+    out_writer.indent += INDENT_STEP;
+    let _ = parse_dirs_and_execute(
+        pdo_dir_path,
+        out_writer,
+        PDO_CAPABILITIES_REGEX,
+        print_pdo_capabilities,
+    )
+    .inspect_err(|err| warn!("{:#}", err));
+    out_writer.indent -= INDENT_STEP;
+}
+
 /// Prints the immediate information in the partner directory, then prints identity, alternate mode, and power data objects (PDO) information.
 pub fn print_partner<W: Write>(port_path: &Path, out_writer: &mut OutputWriter<W>) -> Result<()> {
     let partner_dir_name = [get_path_basename(port_path)?, "-partner"].concat();
@@ -330,8 +393,21 @@ pub fn print_partner<W: Write>(port_path: &Path, out_writer: &mut OutputWriter<W
     let _ = out_writer.print_dir_files(&partner_path_buf).inspect_err(|err| warn!("{:#}", err));
 
     out_writer.indent += INDENT_STEP;
+
     let _ =
         print_partner_identity(&partner_path_buf, out_writer).inspect_err(|err| warn!("{:#}", err));
+
+    let _ = parse_dirs_and_execute(
+        &partner_path_buf,
+        out_writer,
+        PARTNER_ALT_MODE_REGEX,
+        print_alt_mode,
+    )
+    .inspect_err(|err| warn!("{:#}", err));
+
+    let _ = parse_dirs_and_execute(&partner_path_buf, out_writer, PARTNER_PDO_REGEX, print_pdos)
+        .inspect_err(|err| warn!("{:#}", err));
+
     out_writer.indent -= INDENT_STEP;
     Ok(())
 }
