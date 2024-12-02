@@ -35,6 +35,8 @@ pub const PARTNER_PDO_REGEX: &str = "^pd[0-9]+$";
 pub const PDO_CAPABILITIES_REGEX: &str = "^(sink|source)-capabilities$";
 pub const PDO_TYPE_REGEX: &str =
     "^[0-9]+:(battery|fixed_supply|programmable_supply|variable_supply)$";
+pub const USB_PORT_REGEX: &str = "^usb[0-9]+\\-port[0-9]+$";
+pub const USB_DEVICE_REGEX: &str = "^[0-9]+\\-[0-9]+(\\.[0-9]+)*$";
 
 pub const INDENT_STEP: usize = 2;
 
@@ -567,13 +569,98 @@ pub fn print_cable<W: Write>(port: &Path, out_writer: &mut OutputWriter<W>) -> R
     Ok(())
 }
 
+/// Prints the panel and horizontal_position in the physical_location directory of a port.
+pub fn print_physical_location<W: Write>(
+    port_path: &Path,
+    out_writer: &mut OutputWriter<W>,
+) -> Result<()> {
+    let physical_location_dir = port_path.join("physical_location");
+    if !(physical_location_dir.is_dir() | physical_location_dir.is_symlink()) {
+        bail!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", physical_location_dir);
+    }
+    out_writer.print_str_indent("physical_location")?;
+
+    out_writer.indent += INDENT_STEP;
+    out_writer.print_file_formatted(&physical_location_dir.join("panel"))?;
+    out_writer.print_file_formatted(&physical_location_dir.join("horizontal_position"))?;
+    out_writer.indent -= INDENT_STEP;
+
+    Ok(())
+}
+
+// Prints the `busnum`, `devnum`, `devpath` in the usb device directory, which are minimal
+// info needed to map to corresponding peripheral.
+pub fn print_usb_device_info<W: Write>(usb_device: &Path, out_writer: &mut OutputWriter<W>) {
+    out_writer.print_str_indent("usb_device").inspect_err(|err| warn!("{:#}", err)).ok();
+
+    out_writer.indent += INDENT_STEP;
+    out_writer
+        .print_file_formatted(&usb_device.join("busnum"))
+        .inspect_err(|err| warn!("{:#}", err))
+        .ok();
+    out_writer
+        .print_file_formatted(&usb_device.join("devnum"))
+        .inspect_err(|err| warn!("{:#}", err))
+        .ok();
+    out_writer
+        .print_file_formatted(&usb_device.join("devpath"))
+        .inspect_err(|err| warn!("{:#}", err))
+        .ok();
+    parse_dirs_and_execute(usb_device, out_writer, USB_DEVICE_REGEX, print_usb_device_info)
+        .inspect_err(|err| warn!("{:#}", err))
+        .ok();
+    out_writer.indent -= INDENT_STEP;
+}
+
+// Finds and prints information about the usb device in the usb port directory.
+pub fn print_usb_device<W: Write>(usb_port: &Path, out_writer: &mut OutputWriter<W>) {
+    let usb_device_dir = usb_port.join("device");
+    if !(usb_device_dir.is_dir() | usb_device_dir.is_symlink()) {
+        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", usb_device_dir);
+        return;
+    }
+
+    print_usb_device_info(&usb_device_dir, out_writer);
+}
+
+/// Finds the type-c port's linked usb ports and print relevant usb subsystem information.
+pub fn print_usb_subsystem<W: Write>(
+    port_path: &Path,
+    out_writer: &mut OutputWriter<W>,
+) -> Result<()> {
+    let _ = parse_dirs_and_execute(port_path, out_writer, USB_PORT_REGEX, print_usb_device);
+    Ok(())
+}
+
+/// Prints `connector_id` and `status` in the drm_connector directory which is a symlink
+/// to the corresponding DP connector.
+pub fn print_drm_subsystem<W: Write>(
+    port_path: &Path,
+    out_writer: &mut OutputWriter<W>,
+) -> Result<()> {
+    let drm_path = port_path.join("drm_connector");
+    if !(drm_path.is_dir() | drm_path.is_symlink()) {
+        bail!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", drm_path);
+    }
+    out_writer.print_str_indent("dp_connector")?;
+
+    out_writer.indent += INDENT_STEP;
+    out_writer.print_file_formatted(&drm_path.join("connector_id"))?;
+    out_writer.print_file_formatted(&drm_path.join("status"))?;
+    out_writer.indent -= INDENT_STEP;
+
+    Ok(())
+}
+
 /// Prints relevant type-c connector class information for the port located at the sysfs path "port_path".
 pub fn print_port_info<W: Write>(port_path: &Path, out_writer: &mut OutputWriter<W>) {
     let _ = out_writer.print_dir_files(port_path).inspect_err(|err| warn!("{:#}", err));
     out_writer.indent += INDENT_STEP;
     let _ = print_partner(port_path, out_writer).inspect_err(|err| warn!("{:#}", err));
     print_cable(port_path, out_writer).inspect_err(|err| warn!("{:#}", err)).ok();
-
+    print_physical_location(port_path, out_writer).inspect_err(|err| warn!("{:#}", err)).ok();
+    print_usb_subsystem(port_path, out_writer).inspect_err(|err| warn!("{:#}", err)).ok();
+    print_drm_subsystem(port_path, out_writer).inspect_err(|err| warn!("{:#}", err)).ok();
     out_writer.indent -= INDENT_STEP;
 }
 
