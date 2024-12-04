@@ -22,9 +22,10 @@ use std::io::Cursor;
 use tempfile::tempdir;
 
 use crate::typec_class_utils::{
-    get_pd_revision, parse_dirs_and_execute, print_vdo, read_vdo, OutputWriter, PORT_REGEX,
+    get_partner_product_type, get_pd_revision, parse_dirs_and_execute, print_alt_mode, print_pdos,
+    print_vdo, read_vdo, OutputWriter, PORT_REGEX,
 };
-use crate::usb_pd_utils::{pd30_data, PDRev};
+use crate::usb_pd_utils::{pd30_data, PdRev, PortType, ProductType};
 
 /// Creates a temporary hierarchy of directories and files with content.
 /// The dir_paths_files_content array param expects the following format:
@@ -176,18 +177,22 @@ fn test_print_vdo() {
 
 #[test]
 fn test_read_vdo() {
-    let temp_dir_path = create_full_typec_connector_class_temp_file_hierarchy();
+    let temp_dir_path =
+        create_temp_dir_with_dirs_files_content(&[("identity", &[("id_header", "0x4c4018d1")])]);
 
-    let vdo = read_vdo(&temp_dir_path.join("port0/port0-partner/identity/id_header"))
-        .expect("read_vdo returned an error");
+    let vdo =
+        read_vdo(&temp_dir_path.join("identity/id_header")).expect("read_vdo returned an error");
     assert_eq!(vdo, 0x4c4018d1);
 }
 
 #[test]
 fn test_get_pd_revision() {
-    let temp_dir_path = create_full_typec_connector_class_temp_file_hierarchy();
-    let pd_rev = get_pd_revision(&temp_dir_path.join("port0/port0-partner"));
-    assert_eq!(pd_rev, PDRev::PD30);
+    let temp_dir_path = create_temp_dir_with_dirs_files_content(&[(
+        "port0-partner",
+        &[("usb_power_delivery_revision", "3.0")],
+    )]);
+    let pd_rev = get_pd_revision(&temp_dir_path.join("port0-partner"));
+    assert_eq!(pd_rev, PdRev::Pd30);
 }
 
 #[test]
@@ -206,6 +211,85 @@ port1
     let _ = parse_dirs_and_execute(&temp_dir_path, &mut outp_writer, PORT_REGEX, |path, out_wr| {
         let _ = out_wr.print_dir_files(path);
     });
+
+    assert_eq!(
+        &String::from_utf8(outp_buffer.into_inner()).expect("Cannot decode output buffer"),
+        expected_outp
+    )
+}
+
+#[test]
+fn test_get_partner_product_type_pd30_ufp() {
+    let temp_dir_path =
+        create_temp_dir_with_dirs_files_content(&[("identity", &[("id_header", "0x4c4018d1")])]);
+    let prod_type = get_partner_product_type(&temp_dir_path, PdRev::Pd30);
+
+    assert_eq!(prod_type, ProductType::Port((PortType::Ufp, PdRev::Pd30)));
+}
+
+#[test]
+fn test_get_partner_product_type_pd31_drd() {
+    let temp_dir_path =
+        create_temp_dir_with_dirs_files_content(&[("identity", &[("id_header", "0x08800000")])]);
+    let prod_type = get_partner_product_type(&temp_dir_path, PdRev::Pd31);
+
+    assert_eq!(prod_type, ProductType::Port((PortType::Drd, PdRev::Pd31)));
+}
+
+#[test]
+fn test_get_partner_product_type_other() {
+    let temp_dir_path = create_temp_dir_with_dirs_files_content(&[]);
+    let prod_type = get_partner_product_type(&temp_dir_path, PdRev::Pd20);
+
+    assert_eq!(prod_type, ProductType::Other);
+}
+
+#[test]
+fn test_print_alt_mode() {
+    let temp_dir_path = create_full_typec_connector_class_temp_file_hierarchy();
+    let mut outp_buffer: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+    let mut outp_writer = OutputWriter::new(&mut outp_buffer, 0);
+    let expected_outp = "port0-partner.0
+  description: DisplayPort
+  vdo: 0x001c0045
+  mode1
+    description: DisplayPort
+    vdo: 0x001c0045
+";
+
+    print_alt_mode(
+        &temp_dir_path.join("port0").join("port0-partner").join("port0-partner.0"),
+        &mut outp_writer,
+    );
+    assert_eq!(
+        &String::from_utf8(outp_buffer.into_inner()).expect("Cannot decode output buffer"),
+        expected_outp
+    )
+}
+
+#[test]
+fn test_print_pdos() {
+    let temp_dir_path = create_full_typec_connector_class_temp_file_hierarchy();
+    let mut outp_buffer: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+    let mut outp_writer = OutputWriter::new(&mut outp_buffer, 0);
+    let expected_outp = "pd0
+  revision: 3.0
+  sink-capabilities
+    uevent: 
+    1:fixed_supply
+      operational_current: 0mA
+      voltage: 5000mV
+  source-capabilities
+    uevent: 
+    2:fixed_supply
+      maximum_current: 3000mA
+      voltage: 9000mV
+    4:fixed_supply
+      maximum_current: 3000mA
+      voltage: 20000mV
+";
+
+    print_pdos(&temp_dir_path.join("port0").join("port0-partner").join("pd0"), &mut outp_writer);
 
     assert_eq!(
         &String::from_utf8(outp_buffer.into_inner()).expect("Cannot decode output buffer"),
