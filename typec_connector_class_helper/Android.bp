@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package {
+    default_team: "trendy_team_android_usb",
+}
+
 rust_defaults {
     name: "typec_connector_class_helper_defaults",
     rustlibs: [
@@ -28,4 +32,16 @@ rust_binary {
     srcs: ["src/main.rs"],
     defaults: ["typec_connector_class_helper_defaults"],
     prefer_rlib: true,
+}
+
+rust_test {
+    name: "typec_connector_class_test",
+    crate_name: "typec_connector_class_test",
+    srcs: ["src/main.rs"],
+    defaults: ["typec_connector_class_helper_defaults"],
+    test_suites: ["general-tests"],
+    auto_gen_config: true,
+    // Required to access /dev/cros_ec.
+    require_root: true,
+    rustlibs: ["libtempfile"],
 }
