@@ -26,9 +26,11 @@ use std::{
 
 pub const TYPEC_SYSFS_PATH: &str = "/sys/class/typec";
 
+pub const MODE_REGEX: &str = "^mode[0-9]+$";
+pub const PLUG_ALT_MODE_REGEX: &str = "^port[0-9]+\\-plug[0-9]+\\.[0-9]+$";
+pub const PLUG_REGEX: &str = "^port[0-9]+\\-plug[0-9]+$";
 pub const PORT_REGEX: &str = "^port[0-9]+$";
 pub const PARTNER_ALT_MODE_REGEX: &str = "^port[0-9]+-partner\\.[0-9]+$";
-pub const MODE_REGEX: &str = "^mode[0-9]+$";
 pub const PARTNER_PDO_REGEX: &str = "^pd[0-9]+$";
 pub const PDO_CAPABILITIES_REGEX: &str = "^(sink|source)-capabilities$";
 pub const PDO_TYPE_REGEX: &str =
@@ -140,42 +142,63 @@ pub fn print_decoded_vdos_from_files<W: Write>(
     }
 }
 
+/// Prints the identity information of a USB device.
+/// This function reads and decodes the identity descriptors of a USB device,
+/// including its ID header, certification status, and product information.
+/// The output is formatted and written using the provided `OutputWriter`.
+/// # Arguments
+/// * `dev_path` - A reference to the Path of the device's directory.
+/// * `out_writer` - A mutable reference to an OutputWriter for writing the output.
+/// # Returns
+/// * `Result<()>` - A Result indicating success or failure of the printing operation.
+pub fn print_identity<W: Write>(dev_path: &Path, out_writer: &mut OutputWriter<W>) -> Result<()> {
+    out_writer.print_str_indent("identity").inspect_err(|err| warn!("{:#}", err)).ok();
+
+    out_writer.indent += INDENT_STEP;
+
+    let filename_vdo_fields_arr: &[(&str, &[VdoField]); 3] = match get_pd_revision(dev_path) {
+        PdRev::Pd20 => &[
+            ("id_header", pd20_data::ID_HEADER_VDO),
+            ("cert_stat", pd20_data::CERT_STAT_VDO),
+            ("product", pd20_data::PRODUCT_VDO),
+        ],
+        PdRev::Pd30 => &[
+            ("id_header", pd30_data::ID_HEADER_VDO),
+            ("cert_stat", pd30_data::CERT_STAT_VDO),
+            ("product", pd30_data::PRODUCT_VDO),
+        ],
+        PdRev::Pd31 => &[
+            ("id_header", pd31_data::ID_HEADER_VDO),
+            ("cert_stat", pd31_data::CERT_STAT_VDO),
+            ("product", pd31_data::PRODUCT_VDO),
+        ],
+        PdRev::None => &[("id_header", &[]), ("cert_stat", &[]), ("product", &[])],
+    };
+    print_decoded_vdos_from_files(
+        &mut dev_path.join("identity"),
+        filename_vdo_fields_arr,
+        out_writer,
+    );
+    out_writer.indent -= INDENT_STEP;
+
+    Ok(())
+}
+
 /// Prints the contents of an identity directory including VDO fields which are determined by product type.
 pub fn print_partner_identity<W: Write>(
     partner_path: &Path,
     out_writer: &mut OutputWriter<W>,
 ) -> Result<()> {
     let mut identity_path_buf: PathBuf = partner_path.join("identity");
-
     if !(identity_path_buf.is_dir() | identity_path_buf.is_symlink()) {
         bail!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", identity_path_buf);
     }
 
-    let _ = out_writer.print_str_indent("identity").inspect_err(|err| warn!("{:#}", err));
+    let _ = print_identity(partner_path, out_writer).inspect_err(|err| warn!("{:#}", err));
 
     out_writer.indent += INDENT_STEP;
 
     let pd_rev = get_pd_revision(partner_path);
-
-    let filename_vdo_fields_arr: [(&str, &[VdoField]); 3] = match pd_rev {
-        PdRev::Pd20 => [
-            ("id_header", pd20_data::ID_HEADER_VDO),
-            ("cert_stat", pd20_data::CERT_STAT_VDO),
-            ("product", pd20_data::PRODUCT_VDO),
-        ],
-        PdRev::Pd30 => [
-            ("id_header", pd30_data::ID_HEADER_VDO),
-            ("cert_stat", pd30_data::CERT_STAT_VDO),
-            ("product", pd30_data::PRODUCT_VDO),
-        ],
-        PdRev::Pd31 => [
-            ("id_header", pd31_data::ID_HEADER_VDO),
-            ("cert_stat", pd31_data::CERT_STAT_VDO),
-            ("product", pd31_data::PRODUCT_VDO),
-        ],
-        PdRev::None => [("id_header", &[]), ("cert_stat", &[]), ("product", &[])],
-    };
-    print_decoded_vdos_from_files(&mut identity_path_buf, &filename_vdo_fields_arr, out_writer);
 
     let vdo_fields_arr: [&[VdoField]; 3] = match get_partner_product_type(partner_path, pd_rev) {
         ProductType::Ama(PdRev::Pd20) => [pd20_data::AMA_VDO, &[], &[]],
@@ -198,6 +221,7 @@ pub fn print_partner_identity<W: Write>(
     let filenames = ["product_type_vdo1", "product_type_vdo2", "product_type_vdo3"];
     let filename_vdo_fields_arr: Vec<(&str, &[VdoField])> =
         filenames.into_iter().zip(vdo_fields_arr).collect();
+
     print_decoded_vdos_from_files(&mut identity_path_buf, &filename_vdo_fields_arr, out_writer);
 
     out_writer.indent -= INDENT_STEP;
@@ -412,11 +436,144 @@ pub fn print_partner<W: Write>(port_path: &Path, out_writer: &mut OutputWriter<W
     Ok(())
 }
 
+/// Determines the product type of a USB cable by reading its identity descriptors.
+/// This function reads the "id_header" file within the "identity" directory of the cable's path
+/// to determine its product type based on the USB PD revision and product mask.
+/// # Arguments
+/// * `dir` - A reference to the Path of the cable's directory.
+/// # Returns
+/// * `ProductType` - The determined product type of the cable.
+pub fn get_cable_product_type(dir: &Path) -> ProductType {
+    let id_header = match read_vdo(&dir.join("identity").join("id_header")) {
+        Err(err) => {
+            warn!("get cable type failed to read vdo: {:#}", err);
+            return ProductType::Other;
+        }
+        Ok(id_header) => id_header,
+    };
+
+    let pd = get_pd_revision(dir);
+    let prod_mask = id_header & UFP_PRODUCT_TYPE_MASK;
+
+    // All USB PD 3.1/3.0/2.0 support passive cables.
+    if pd == PdRev::Pd20 && prod_mask == pd20_data::PASSIVE_CABLE_COMP
+        || pd == PdRev::Pd30 && prod_mask == pd30_data::PASSIVE_CABLE_COMP
+        || pd == PdRev::Pd31 && prod_mask == pd31_data::PASSIVE_CABLE_COMP
+    {
+        return ProductType::Cable((CableType::Passive, pd));
+    }
+
+    // All USB PD 3.1/3.0/2.0 support active cables.
+    if pd == PdRev::Pd20 && prod_mask == pd20_data::ACTIVE_CABLE_COMP
+        || pd == PdRev::Pd30 && prod_mask == pd30_data::ACTIVE_CABLE_COMP
+        || pd == PdRev::Pd31 && prod_mask == pd31_data::ACTIVE_CABLE_COMP
+    {
+        return ProductType::Cable((CableType::Active, pd));
+    }
+
+    // USB PD 3.1 also supports Vconn Powered Devices (VPD).
+    if pd == PdRev::Pd31 && prod_mask == pd31_data::VPD_COMP {
+        return ProductType::Cable((CableType::Vpd, pd));
+    }
+
+    ProductType::Other
+}
+
+/// Prints the identity information of a USB cable.
+/// This function prints the identity information of a USB cable, including its product type and
+/// decoded VDOs (Vendor-Defined Objects) based on its PD revision.
+/// # Arguments
+/// * `cable` - A reference to the Path of the cable's directory.
+/// * `out_writer` - A mutable reference to an OutputWriter for writing the output.
+pub fn print_cable_identity<W: Write>(cable: &Path, out_writer: &mut OutputWriter<W>) {
+    let mut identity = cable.join("identity");
+    if !(identity.is_dir() | identity.is_symlink()) {
+        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", identity);
+        return;
+    }
+
+    let _ = print_identity(cable, out_writer).inspect_err(|err| warn!("{:#}", err));
+
+    out_writer.indent += INDENT_STEP;
+
+    let vdos: [&[VdoField]; 3] = match get_cable_product_type(cable) {
+        ProductType::Cable(cable_type) => match cable_type {
+            (CableType::Passive, PdRev::Pd20) => [pd20_data::PASSIVE_VDO, &[], &[]],
+            (CableType::Active, PdRev::Pd20) => [pd20_data::ACTIVE_VDO, &[], &[]],
+            (CableType::Passive, PdRev::Pd30) => [pd30_data::PASSIVE_VDO, &[], &[]],
+            (CableType::Active, PdRev::Pd30) => {
+                [pd30_data::ACTIVE_VDO1, pd30_data::ACTIVE_VDO2, &[]]
+            }
+            (CableType::Passive, PdRev::Pd31) => [pd31_data::PASSIVE_VDO, &[], &[]],
+            (CableType::Active, PdRev::Pd31) => {
+                [pd31_data::ACTIVE_VDO1, pd31_data::ACTIVE_VDO2, &[]]
+            }
+            (CableType::Vpd, PdRev::Pd31) => [pd31_data::VPD_VDO, &[], &[]],
+            _ => [&[], &[], &[]],
+        },
+        _ => [&[], &[], &[]],
+    };
+
+    let descriptions = ["product_type_vdo1", "product_type_vdo2", "product_type_vdo3"];
+    let to_print: Vec<(&str, &[VdoField])> = descriptions.into_iter().zip(vdos).collect();
+
+    print_decoded_vdos_from_files(&mut identity, &to_print, out_writer);
+
+    out_writer.indent -= INDENT_STEP;
+}
+
+/// Prints information about a USB cable plug.
+/// This function prints information about a USB cable plug, including its alternate modes.
+/// # Arguments
+/// * `plug` - A reference to the Path of the plug's directory.
+/// * `out_writer` - A mutable reference to an OutputWriter for writing the output.
+pub fn print_plug_info<W: Write>(plug: &Path, out_writer: &mut OutputWriter<W>) {
+    if !(plug.is_dir() | plug.is_symlink()) {
+        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", plug);
+        return;
+    }
+
+    let _ = out_writer.print_dir_files(plug);
+    out_writer.indent += INDENT_STEP;
+    let _ = parse_dirs_and_execute(plug, out_writer, PLUG_ALT_MODE_REGEX, print_alt_mode)
+        .inspect_err(|err| warn!("{:#}", err));
+    out_writer.indent -= INDENT_STEP;
+}
+
+/// Prints information about a USB cable connected to a port.
+/// This function prints information about a USB cable connected to a port, including its identity,
+/// plug information, and alternate modes.
+/// # Arguments
+/// * `port` - A reference to the Path of the port's directory.
+/// * `out_writer` - A mutable reference to an OutputWriter for writing the output.
+/// # Returns
+/// * `Result<()>` - A Result indicating success or failure.
+pub fn print_cable<W: Write>(port: &Path, out_writer: &mut OutputWriter<W>) -> Result<()> {
+    let cable_path = format!("{}-cable", get_path_basename(port)?);
+    let cable_dir = port.join(cable_path);
+
+    if !(cable_dir.is_dir() | cable_dir.is_symlink()) {
+        bail!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", cable_dir);
+    }
+
+    out_writer.print_dir_files(&cable_dir).inspect_err(|err| warn!("{:#}", err)).ok();
+
+    out_writer.indent += INDENT_STEP;
+    print_cable_identity(&cable_dir, out_writer);
+    let _ = parse_dirs_and_execute(&cable_dir, out_writer, PLUG_REGEX, print_plug_info)
+        .inspect_err(|err| warn!("{:#}", err));
+    out_writer.indent -= INDENT_STEP;
+
+    Ok(())
+}
+
 /// Prints relevant type-c connector class information for the port located at the sysfs path "port_path".
 pub fn print_port_info<W: Write>(port_path: &Path, out_writer: &mut OutputWriter<W>) {
     let _ = out_writer.print_dir_files(port_path).inspect_err(|err| warn!("{:#}", err));
     out_writer.indent += INDENT_STEP;
     let _ = print_partner(port_path, out_writer).inspect_err(|err| warn!("{:#}", err));
+    print_cable(port_path, out_writer).inspect_err(|err| warn!("{:#}", err)).ok();
+
     out_writer.indent -= INDENT_STEP;
 }
 
