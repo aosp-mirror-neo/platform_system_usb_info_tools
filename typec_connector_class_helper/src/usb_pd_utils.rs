@@ -30,12 +30,23 @@ impl VdoField {
     }
 }
 
+// Masks for id_header fields.
+pub const UFP_PRODUCT_TYPE_MASK: u32 = 0x38000000;
+pub const DFP_PRODUCT_TYPE_MASK: u32 = 0x03800000;
+
 #[derive(Debug, PartialEq)]
 pub enum PdRev {
     None,
     Pd20,
     Pd30,
     Pd31,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum CableType {
+    Passive,
+    Active,
+    Vpd,
 }
 
 #[derive(Debug, PartialEq)]
@@ -47,19 +58,22 @@ pub enum PortType {
 
 #[derive(Debug, PartialEq)]
 pub enum ProductType {
+    Cable((CableType, PdRev)),
     Ama(PdRev),
     Vpd(PdRev),
     Port((PortType, PdRev)),
     Other,
 }
 
-// Masks for extracting the product type from the id_header VDO.
-pub const UFP_PRODUCT_TYPE_MASK: u32 = 0x38000000;
-pub const DFP_PRODUCT_TYPE_MASK: u32 = 0x03800000;
-
 /// Constants specific to USB PD revision 2.0.
 pub mod pd20_data {
     use super::VdoField;
+
+    // Expected product identifiers extracted from id_header VDO.
+    pub const AMA_COMP: u32 = 0x28000000;
+    // Expected id_header field results.
+    pub const PASSIVE_CABLE_COMP: u32 = 0x20000000;
+    pub const ACTIVE_CABLE_COMP: u32 = 0x18000000;
 
     // Vendor Data Objects (VDO) decoding information (source: USB PD spec).
     pub const ID_HEADER_VDO: &[VdoField] = &[
@@ -93,13 +107,57 @@ pub mod pd20_data {
         VdoField { index: 28, mask: 0xf0000000, description: "Hardware Version" },
     ];
 
-    // Expected product identifiers extracted from id_header VDO.
-    pub const AMA_COMP: u32 = 0x28000000;
+    pub const PASSIVE_VDO: &[VdoField] = &[
+        VdoField { index: 0, mask: 0x00000007, description: "USB Speed" },
+        VdoField { index: 3, mask: 0x00000008, description: "Reserved" },
+        VdoField { index: 4, mask: 0x00000010, description: "Vbus Through Cable" },
+        VdoField { index: 5, mask: 0x00000060, description: "Vbus Current Handling" },
+        VdoField { index: 7, mask: 0x00000080, description: "SSRX2 Directionality Support" },
+        VdoField { index: 8, mask: 0x00000100, description: "SSRX1 Directionality Support" },
+        VdoField { index: 9, mask: 0x00000200, description: "SSTX2 Directionality Support" },
+        VdoField { index: 10, mask: 0x00000400, description: "SSTX1 Directionality Support" },
+        VdoField { index: 11, mask: 0x00001800, description: "Cable Termination Type" },
+        VdoField { index: 13, mask: 0x0001e000, description: "Cable Latency" },
+        VdoField { index: 17, mask: 0x00020000, description: "Reserved" },
+        VdoField { index: 18, mask: 0x000c0000, description: "USB Type-C Plug to USB Type" },
+        VdoField { index: 20, mask: 0x00f00000, description: "Reserved" },
+        VdoField { index: 24, mask: 0x0f000000, description: "Firmware Version" },
+        VdoField { index: 28, mask: 0xf0000000, description: "HW Version" },
+    ];
+
+    pub const ACTIVE_VDO: &[VdoField] = &[
+        VdoField { index: 0, mask: 0x00000007, description: "USB Speed" },
+        VdoField { index: 3, mask: 0x00000008, description: "SOP'' Controller Present" },
+        VdoField { index: 4, mask: 0x00000010, description: "Vbus Through Cable" },
+        VdoField { index: 5, mask: 0x00000060, description: "Vbus Current Handling" },
+        VdoField { index: 7, mask: 0x00000080, description: "SSRX2 Directionality Support" },
+        VdoField { index: 8, mask: 0x00000100, description: "SSRX1 Directionality Support" },
+        VdoField { index: 9, mask: 0x00000200, description: "SSTX2 Directionality Support" },
+        VdoField { index: 10, mask: 0x00000400, description: "SSTX1 Directionality Support" },
+        VdoField { index: 11, mask: 0x00001800, description: "Cable Termination Type" },
+        VdoField { index: 13, mask: 0x0001e000, description: "Cable Latency" },
+        VdoField { index: 17, mask: 0x00020000, description: "Reserved" },
+        VdoField { index: 18, mask: 0x000c0000, description: "USB Type-C Plug to USB Type" },
+        VdoField { index: 20, mask: 0x00f00000, description: "Reserved" },
+        VdoField { index: 24, mask: 0x0f000000, description: "Firmware Version" },
+        VdoField { index: 28, mask: 0xf0000000, description: "HW Version" },
+    ];
 }
 
 /// Constants specific to USB PD revision 3.0.
 pub mod pd30_data {
     use super::VdoField;
+
+    pub const AMA_COMP: u32 = 0x28000000;
+    pub const VPD_COMP: u32 = 0x30000000;
+    pub const HUB_COMP: u32 = 0x08000000;
+    pub const PERIPHERAL_COMP: u32 = 0x10000000;
+    pub const DFP_HUB_COMP: u32 = 0x00800000;
+    pub const DFP_HOST_COMP: u32 = 0x01000000;
+    pub const POWER_BRICK_COMP: u32 = 0x01800000;
+    // Expected id_header field results.
+    pub const PASSIVE_CABLE_COMP: u32 = 0x18000000;
+    pub const ACTIVE_CABLE_COMP: u32 = 0x20000000;
 
     pub const ID_HEADER_VDO: &[VdoField] = &[
         VdoField { index: 0, mask: 0x0000ffff, description: "USB Vendor ID" },
@@ -138,6 +196,19 @@ pub mod pd30_data {
         VdoField { index: 14, mask: 0x00004000, description: "Charge Through Current Support" },
         VdoField { index: 15, mask: 0x00018000, description: "Maximum Vbus Voltage" },
         VdoField { index: 17, mask: 0x001e0000, description: "Reserved" },
+    ];
+
+    pub const PASSIVE_VDO: &[VdoField] = &[
+        VdoField { index: 0, mask: 0x00000007, description: "USB Speed" },
+        VdoField { index: 3, mask: 0x00000018, description: "Reserved" },
+        VdoField { index: 5, mask: 0x00000060, description: "Vbus Current Handling" },
+        VdoField { index: 7, mask: 0x00000180, description: "Reserved" },
+        VdoField { index: 9, mask: 0x00000600, description: "Maximum Vbus Voltage" },
+        VdoField { index: 11, mask: 0x00001800, description: "Cable Termination Type" },
+        VdoField { index: 13, mask: 0x0001e000, description: "Cable Latency" },
+        VdoField { index: 17, mask: 0x00020000, description: "Reserved" },
+        VdoField { index: 18, mask: 0x000c0000, description: "USB Type-C Plug to USB Type" },
+        VdoField { index: 20, mask: 0x00100000, description: "Reserved" },
         VdoField { index: 21, mask: 0x00e00000, description: "VDO Version" },
         VdoField { index: 24, mask: 0x0f000000, description: "Firmware Version" },
         VdoField { index: 28, mask: 0xf0000000, description: "HW Version" },
@@ -167,20 +238,58 @@ pub mod pd30_data {
         VdoField { index: 24, mask: 0x07000000, description: "Host Capability" },
         VdoField { index: 27, mask: 0x18000000, description: "Reserved" },
         VdoField { index: 29, mask: 0xe0000000, description: "DFP VDO Version" },
+        VdoField { index: 21, mask: 0x00e00000, description: "VDO Version" },
+        VdoField { index: 24, mask: 0x0f000000, description: "Firmware Version" },
+        VdoField { index: 28, mask: 0xf0000000, description: "HW Version" },
     ];
 
-    pub const AMA_COMP: u32 = 0x28000000;
-    pub const VPD_COMP: u32 = 0x30000000;
-    pub const HUB_COMP: u32 = 0x08000000;
-    pub const PERIPHERAL_COMP: u32 = 0x10000000;
-    pub const DFP_HUB_COMP: u32 = 0x00800000;
-    pub const DFP_HOST_COMP: u32 = 0x01000000;
-    pub const POWER_BRICK_COMP: u32 = 0x01800000;
+    pub const ACTIVE_VDO1: &[VdoField] = &[
+        VdoField { index: 0, mask: 0x00000007, description: "USB Speed" },
+        VdoField { index: 3, mask: 0x00000008, description: "SOP'' Controller Present" },
+        VdoField { index: 4, mask: 0x00000010, description: "Vbus Through Cable" },
+        VdoField { index: 5, mask: 0x00000060, description: "Vbus Current Handling" },
+        VdoField { index: 7, mask: 0x00000080, description: "SBU Type" },
+        VdoField { index: 8, mask: 0x00000100, description: "SBU Supported" },
+        VdoField { index: 9, mask: 0x00000600, description: "Maximum Vbus Voltage" },
+        VdoField { index: 11, mask: 0x00001800, description: "Cable Termination Type" },
+        VdoField { index: 13, mask: 0x0001e000, description: "Cable Latency" },
+        VdoField { index: 17, mask: 0x00020000, description: "Reserved" },
+        VdoField { index: 18, mask: 0x000c0000, description: "Connector Type" },
+        VdoField { index: 20, mask: 0x00100000, description: "Reserved" },
+    ];
+
+    pub const ACTIVE_VDO2: &[VdoField] = &[
+        VdoField { index: 0, mask: 0x00000001, description: "USB Gen" },
+        VdoField { index: 1, mask: 0x00000002, description: "Reserved" },
+        VdoField { index: 2, mask: 0x00000004, description: "Optically Insulated Active Cable" },
+        VdoField { index: 3, mask: 0x00000008, description: "USB Lanes Supported" },
+        VdoField { index: 4, mask: 0x00000010, description: "USB 3.2 Supported" },
+        VdoField { index: 5, mask: 0x00000020, description: "USB 2.0 Supported" },
+        VdoField { index: 6, mask: 0x000000c0, description: "USB 2.0 Hub Hops Command" },
+        VdoField { index: 8, mask: 0x00000100, description: "USB4 Supported" },
+        VdoField { index: 9, mask: 0x00000200, description: "Active Element" },
+        VdoField { index: 10, mask: 0x00000400, description: "Physical Connection" },
+        VdoField { index: 11, mask: 0x00000800, description: "U3 to U0 Transition Mode" },
+        VdoField { index: 12, mask: 0x00007000, description: "U3/CLd Power" },
+        VdoField { index: 15, mask: 0x00008000, description: "Reserved" },
+        VdoField { index: 16, mask: 0x00ff0000, description: "Shutdown Tempurature" },
+        VdoField { index: 24, mask: 0xff000000, description: "Max Operating Tempurature" },
+    ];
 }
 
 /// Constants specific to USB PD revision 3.1.
 pub mod pd31_data {
     use super::VdoField;
+
+    pub const HUB_COMP: u32 = 0x08000000;
+    pub const PERIPHERAL_COMP: u32 = 0x10000000;
+    pub const DFP_HUB_COMP: u32 = 0x00800000;
+    pub const DFP_HOST_COMP: u32 = 0x01000000;
+    pub const POWER_BRICK_COMP: u32 = 0x01800000;
+    // Expected id_header field results.
+    pub const PASSIVE_CABLE_COMP: u32 = 0x18000000;
+    pub const ACTIVE_CABLE_COMP: u32 = 0x20000000;
+    pub const VPD_COMP: u32 = 0x30000000;
 
     pub const ID_HEADER_VDO: &[VdoField] = &[
         VdoField { index: 0, mask: 0x0000ffff, description: "USB Vendor ID" },
@@ -223,11 +332,70 @@ pub mod pd31_data {
         VdoField { index: 29, mask: 0xe0000000, description: "DFP VDO Version" },
     ];
 
-    pub const HUB_COMP: u32 = 0x08000000;
-    pub const PERIPHERAL_COMP: u32 = 0x10000000;
-    pub const DFP_HUB_COMP: u32 = 0x00800000;
-    pub const DFP_HOST_COMP: u32 = 0x01000000;
-    pub const POWER_BRICK_COMP: u32 = 0x01800000;
+    pub const PASSIVE_VDO: &[VdoField] = &[
+        VdoField { index: 0, mask: 0x00000007, description: "USB Speed" },
+        VdoField { index: 3, mask: 0x00000018, description: "Reserved" },
+        VdoField { index: 5, mask: 0x00000060, description: "Vbus Current Handling" },
+        VdoField { index: 7, mask: 0x00000180, description: "Reserved" },
+        VdoField { index: 9, mask: 0x00000600, description: "Maximum Vbus Voltage" },
+        VdoField { index: 11, mask: 0x00001800, description: "Cable Termination Type" },
+        VdoField { index: 13, mask: 0x0001e000, description: "Cable Latency" },
+        VdoField { index: 17, mask: 0x00020000, description: "EPR Mode Cable" },
+        VdoField { index: 18, mask: 0x000c0000, description: "USB Type-C Plug to USB Type" },
+        VdoField { index: 20, mask: 0x00100000, description: "Reserved" },
+        VdoField { index: 21, mask: 0x00e00000, description: "VDO Version" },
+        VdoField { index: 24, mask: 0x0f000000, description: "Firmware Version" },
+        VdoField { index: 28, mask: 0xf0000000, description: "HW Version" },
+    ];
+
+    pub const ACTIVE_VDO1: &[VdoField] = &[
+        VdoField { index: 0, mask: 0x00000007, description: "USB Speed" },
+        VdoField { index: 3, mask: 0x00000008, description: "SOP'' Controller Present" },
+        VdoField { index: 4, mask: 0x00000010, description: "Vbus Through Cable" },
+        VdoField { index: 5, mask: 0x00000060, description: "Vbus Current Handling" },
+        VdoField { index: 7, mask: 0x00000080, description: "SBU Type" },
+        VdoField { index: 8, mask: 0x00000100, description: "SBU Supported" },
+        VdoField { index: 9, mask: 0x00000600, description: "Maximum Vbus Voltage" },
+        VdoField { index: 11, mask: 0x00001800, description: "Cable Termination Type" },
+        VdoField { index: 13, mask: 0x0001e000, description: "Cable Latency" },
+        VdoField { index: 17, mask: 0x00020000, description: "EPR Mode Cable" },
+        VdoField { index: 18, mask: 0x000c0000, description: "USB Type-C Plug to USB Type" },
+        VdoField { index: 20, mask: 0x00100000, description: "Reserved" },
+        VdoField { index: 21, mask: 0x00e00000, description: "VDO Version" },
+        VdoField { index: 24, mask: 0x0f000000, description: "Firmware Version" },
+        VdoField { index: 28, mask: 0xf0000000, description: "HW Version" },
+    ];
+
+    pub const ACTIVE_VDO2: &[VdoField] = &[
+        VdoField { index: 0, mask: 0x00000001, description: "USB Gen" },
+        VdoField { index: 1, mask: 0x00000002, description: "Reserved" },
+        VdoField { index: 2, mask: 0x00000004, description: "Optically Insulated Active Cable" },
+        VdoField { index: 3, mask: 0x00000008, description: "USB Lanes Supported" },
+        VdoField { index: 4, mask: 0x00000010, description: "USB 3.2 Supported" },
+        VdoField { index: 5, mask: 0x00000020, description: "USB 2.0 Supported" },
+        VdoField { index: 6, mask: 0x000000c0, description: "USB 2.0 Hub Hops Command" }, // Corrected mask
+        VdoField { index: 8, mask: 0x00000100, description: "USB4 Supported" },
+        VdoField { index: 9, mask: 0x00000200, description: "Active Element" },
+        VdoField { index: 10, mask: 0x00000400, description: "Physical Connection" },
+        VdoField { index: 11, mask: 0x00000800, description: "U3 to U0 Transition Mode" },
+        VdoField { index: 12, mask: 0x00007000, description: "U3/CLd Power" },
+        VdoField { index: 15, mask: 0x00008000, description: "Reserved" },
+        VdoField { index: 16, mask: 0x00ff0000, description: "Shutdown Tempurature" },
+        VdoField { index: 24, mask: 0xff000000, description: "Max Operating Tempurature" },
+    ];
+
+    pub const VPD_VDO: &[VdoField] = &[
+        VdoField { index: 0, mask: 0x00000001, description: "Charge Through Support" },
+        VdoField { index: 1, mask: 0x0000007e, description: "Ground Impedance" },
+        VdoField { index: 7, mask: 0x00001f80, description: "Vbus Impedance" },
+        VdoField { index: 13, mask: 0x00002000, description: "Reserved" },
+        VdoField { index: 14, mask: 0x00004000, description: "Charge Through Current Support" },
+        VdoField { index: 15, mask: 0x00018000, description: "Maximum Vbus Voltage" },
+        VdoField { index: 17, mask: 0x001e0000, description: "Reserved" },
+        VdoField { index: 21, mask: 0x00e00000, description: "VDO Version" },
+        VdoField { index: 24, mask: 0x0f000000, description: "Firmware Version" },
+        VdoField { index: 28, mask: 0xf0000000, description: "HW Version" },
+    ];
 }
 
 #[cfg(test)]
