@@ -15,6 +15,10 @@
 //! main
 
 mod typec_class_utils;
+mod usb_pd_utils;
+
+#[cfg(test)]
+mod typec_class_utils_tests;
 
 use anyhow::{anyhow, Result};
 use std::{env, io::stdout, path::Path};
@@ -26,7 +30,7 @@ fn main() -> Result<()> {
     logger::init(
         logger::Config::default()
             .with_tag_on_device("usb_info")
-            .with_max_level(log::LevelFilter::Trace),
+            .with_max_level(log::LevelFilter::Info),
     );
 
     let args: Vec<String> = env::args().collect();
