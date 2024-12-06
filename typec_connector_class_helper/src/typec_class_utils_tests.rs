@@ -21,11 +21,8 @@ use std::io::Cursor;
 
 use tempfile::tempdir;
 
-use crate::typec_class_utils::{
-    get_partner_product_type, get_pd_revision, parse_dirs_and_execute, print_alt_mode, print_pdos,
-    print_vdo, read_vdo, OutputWriter, PORT_REGEX,
-};
-use crate::usb_pd_utils::{pd30_data, PdRev, PortType, ProductType};
+use crate::typec_class_utils::*;
+use crate::usb_pd_utils::*;
 
 /// Creates a temporary hierarchy of directories and files with content.
 /// The dir_paths_files_content array param expects the following format:
@@ -123,6 +120,18 @@ fn create_full_typec_connector_class_temp_file_hierarchy() -> PathBuf {
         ),
         ("port1", &[]),
         ("portignored", &[("ignored", "ignored content")]),
+        ("port0-cable", &[("usb_power_delivery_revision", "3.0")]),
+        (
+            "port0-cable/identity",
+            &[
+                ("cert_stat", "0x00000000"),
+                ("id_header", "0x1c6003f0"),
+                ("product", "0x94880001"),
+                ("product_type_vdo1", "0x11082043"),
+                ("product_type_vdo2", "0x00000000"),
+                ("product_type_vdo3", "0x00000000"),
+            ],
+        ),
     ])
 }
 
@@ -275,12 +284,12 @@ fn test_print_pdos() {
     let expected_outp = "pd0
   revision: 3.0
   sink-capabilities
-    uevent: 
+    uevent:\x20
     1:fixed_supply
       operational_current: 0mA
       voltage: 5000mV
   source-capabilities
-    uevent: 
+    uevent:\x20
     2:fixed_supply
       maximum_current: 3000mA
       voltage: 9000mV
@@ -295,4 +304,14 @@ fn test_print_pdos() {
         &String::from_utf8(outp_buffer.into_inner()).expect("Cannot decode output buffer"),
         expected_outp
     )
+}
+
+#[test]
+fn test_get_cable_product_type() {
+    let temp_dir_path = create_full_typec_connector_class_temp_file_hierarchy();
+    let expected_outp: ProductType = ProductType::Cable((CableType::Passive, PdRev::Pd30));
+
+    let prod_type = get_cable_product_type(&temp_dir_path.join("port0-cable"));
+
+    assert_eq!(prod_type, expected_outp)
 }
