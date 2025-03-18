@@ -41,7 +41,12 @@ rust_test {
     defaults: ["typec_connector_class_helper_defaults"],
     test_suites: ["general-tests"],
     auto_gen_config: true,
-    // Required to access /dev/cros_ec.
-    require_root: true,
     rustlibs: ["libtempfile"],
+}
+
+rust_library {
+    name: "libtypec_sysfs_helper",
+    crate_name: "typec_sysfs_helper",
+    srcs: ["src/lib.rs"],
+    defaults: ["typec_connector_class_helper_defaults"],
 }
