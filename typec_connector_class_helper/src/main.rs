@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! main
+//! Provides a command-line tool to query and display information about
+//! USB-C ports using the Typec Connector Class.
+//!
+//! It iterates through the Typec Connector Class sysfs entries, parses the
+//! relevant information, and prints it to the standard output.
 
 mod typec_class_utils;
 mod usb_pd_utils;
