@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! typec_class_utils_tests
+//! Tests for the `typec_class_utils` module.
 
 use std::path::PathBuf;
 use std::{fs, io::Write};

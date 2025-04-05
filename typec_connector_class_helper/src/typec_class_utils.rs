@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! typec_class_utils
+//! Provides utility functions for parsing and printing information from the Type-C connector class in sysfs.
+//! It includes functions for reading and decoding VDOs, printing directory contents, and handling different types of devices and ports.
 
 use crate::usb_pd_utils::*;
 use anyhow::{bail, Context, Result};
@@ -24,20 +25,32 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// The base path for the Type-C connector class in sysfs.
 pub const TYPEC_SYSFS_PATH: &str = "/sys/class/typec";
 
+/// Regex for matching mode directories (e.g., "mode0", "mode1").
 pub const MODE_REGEX: &str = "^mode[0-9]+$";
+/// Regex for matching plug alternate mode directories (e.g., "port0-plug1.0").
 pub const PLUG_ALT_MODE_REGEX: &str = "^port[0-9]+\\-plug[0-9]+\\.[0-9]+$";
+/// Regex for matching plug directories (e.g., "port0-plug1").
 pub const PLUG_REGEX: &str = "^port[0-9]+\\-plug[0-9]+$";
+/// Regex for matching port directories (e.g., "port0", "port1").
 pub const PORT_REGEX: &str = "^port[0-9]+$";
+/// Regex for matching partner alternate mode directories (e.g., "port0-partner.0").
 pub const PARTNER_ALT_MODE_REGEX: &str = "^port[0-9]+-partner\\.[0-9]+$";
+/// Regex for matching partner PDO (Power Delivery Object) directories (e.g., "pd0", "pd1").
 pub const PARTNER_PDO_REGEX: &str = "^pd[0-9]+$";
+/// Regex for matching PDO capabilities directories (e.g., "sink-capabilities", "source-capabilities").
 pub const PDO_CAPABILITIES_REGEX: &str = "^(sink|source)-capabilities$";
+/// Regex for matching PDO type directories (e.g., "0:battery", "1:fixed_supply").
 pub const PDO_TYPE_REGEX: &str =
     "^[0-9]+:(battery|fixed_supply|programmable_supply|variable_supply)$";
+/// Regex for matching USB port directories (e.g., "usb0-port0", "usb1-port2").
 pub const USB_PORT_REGEX: &str = "^usb[0-9]+\\-port[0-9]+$";
+/// Regex for matching USB device directories (e.g., "0-1", "1-2.3").
 pub const USB_DEVICE_REGEX: &str = "^[0-9]+\\-[0-9]+(\\.[0-9]+)*$";
 
+/// The number of spaces to indent for each level of nesting.
 pub const INDENT_STEP: usize = 2;
 
 const ERR_READ_DIR: &str = "Failed to iterate over files in directory";
@@ -61,18 +74,30 @@ impl<T> WarnErr for Result<T> {
     }
 }
 
+/// A struct for writing formatted output with indentation.
+///
+/// This struct wraps a `Write` object and provides methods for printing strings and files
+/// with proper indentation. It maintains an `indent` level to control the spacing before
+/// each line of output.
 pub struct OutputWriter<W: Write> {
     buffer: W,
-    indent: usize,
+    /// indent
+    pub indent: usize,
 }
 
 impl<W: Write> OutputWriter<W> {
+    /// Creates a new `OutputWriter`.
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer`: The `Write` object to which the output will be written.
+    /// * `indent`: The initial indentation level.
     pub fn new(buffer: W, indent: usize) -> Self {
         Self { buffer, indent }
     }
 
     /// Prints a string with indentation.
-    fn print_str_indent(&mut self, str_to_print: &str) -> Result<()> {
+    pub fn print_str_indent(&mut self, str_to_print: &str) -> Result<()> {
         writeln!(self.buffer, "{:indent$}{str_to_print}", "", indent = self.indent)
             .with_context(|| format!("{ERR_WRITE_TO_BUFFER} {:?}", str_to_print))?;
         Ok(())
@@ -360,7 +385,7 @@ pub fn read_vdo(vdo_path: &Path) -> Result<u32> {
     Ok(vdo)
 }
 
-// Prints the immediate files in an alternate mode directory, then prints the files in each mode subdirectory.
+/// Prints the immediate files in an alternate mode directory, then prints the files in each mode subdirectory.
 pub fn print_alt_mode<W: Write>(alt_mode_dir_path: &Path, out_writer: &mut OutputWriter<W>) {
     if !(alt_mode_dir_path.is_dir() | alt_mode_dir_path.is_symlink()) {
         warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", alt_mode_dir_path);
@@ -381,7 +406,7 @@ pub fn print_alt_mode<W: Write>(alt_mode_dir_path: &Path, out_writer: &mut Outpu
     out_writer.indent -= INDENT_STEP;
 }
 
-// Prints detailed information about the PDOs given at capabilities_dir_path, including available voltages and currents.
+/// Prints detailed information about the PDOs given at capabilities_dir_path, including available voltages and currents.
 pub fn print_pdo_capabilities<W: Write>(capabilities: &Path, out_writer: &mut OutputWriter<W>) {
     out_writer.print_dir_files(capabilities).warn_err();
     out_writer.indent += INDENT_STEP;
@@ -397,8 +422,8 @@ pub fn print_pdo_capabilities<W: Write>(capabilities: &Path, out_writer: &mut Ou
     out_writer.indent -= INDENT_STEP;
 }
 
-// Prints the immediate files in a PDO data directory, then call
-// print_pdo_capabilities to print more detailed PDO information.
+/// Prints the immediate files in a PDO data directory, then call
+/// print_pdo_capabilities to print more detailed PDO information.
 pub fn print_pdos<W: Write>(pdo_dir_path: &Path, out_writer: &mut OutputWriter<W>) {
     if !(pdo_dir_path.is_dir() | pdo_dir_path.is_symlink()) {
         warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", pdo_dir_path);
@@ -589,8 +614,8 @@ pub fn print_physical_location<W: Write>(
     Ok(())
 }
 
-// Prints the `busnum`, `devnum`, `devpath` in the usb device directory, which are minimal
-// info needed to map to corresponding peripheral.
+/// Prints the `busnum`, `devnum`, `devpath` in the usb device directory, which are minimal
+/// info needed to map to corresponding peripheral.
 pub fn print_usb_device_info<W: Write>(usb_device: &Path, out_writer: &mut OutputWriter<W>) {
     out_writer.print_str_indent("usb_device").warn_err();
 
@@ -603,7 +628,7 @@ pub fn print_usb_device_info<W: Write>(usb_device: &Path, out_writer: &mut Outpu
     out_writer.indent -= INDENT_STEP;
 }
 
-// Finds and prints information about the usb device in the usb port directory.
+/// Finds and prints information about the usb device in the usb port directory.
 pub fn print_usb_device<W: Write>(usb_port: &Path, out_writer: &mut OutputWriter<W>) {
     let usb_device_dir = usb_port.join("device");
     if !(usb_device_dir.is_dir() | usb_device_dir.is_symlink()) {
