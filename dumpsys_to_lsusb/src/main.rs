@@ -14,21 +14,24 @@
 
 //! Parses `dumpsys usb` data from an Android device and outputs it in a format similar to `lsusb` verbose and tree (usbutils).
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use framework_usb_protos_rs::enums::UsbEndPointDirection;
 use framework_usb_protos_rs::enums::UsbEndPointType;
 use framework_usb_protos_rs::usb::UsbDeviceProto;
 use framework_usb_protos_rs::usb::UsbServiceDumpProto;
 use protobuf::Message;
+use std::fs;
 use std::io::stdout;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use typec_sysfs_helper::typec_class_utils::OutputWriter;
+use walkdir::WalkDir;
 
 const INDENT_STEP: usize = 2;
+const USB_SYSFS_PATH_PREFIX: &str = "/sys/bus/usb/devices";
 
-/// Extracts the bus and device numbers from a USB path.
+/// Extracts the bus number and the device number from a USB path.
 ///
 /// The function expects a path in the format `/dev/bus/usb/<bus>/<dev>`. If the path does not
 /// match this format, it returns (0, 0). The USB path represents the device location in sysfs,
@@ -104,6 +107,40 @@ fn print_struct_fields<W: Write>(
     fields_to_print.iter().try_for_each(|f| (f.print_fn)(f.key, f.value.clone(), outp_writer))
 }
 
+/// Finds the path to the device's sysfs directory.
+///
+/// The function uses the bus number and the device number to construct the path to the device's
+/// sysfs directory. It iterates through all directories under the sysfs path prefix, and returns
+/// the path to the directory whose devnum matches the provided devnum. If no matching directory
+/// is found, it returns an error.
+fn find_sysfs_usb_path(busnum: u8, devnum: u8) -> Result<PathBuf> {
+    let path_root = format!("{USB_SYSFS_PATH_PREFIX}/usb{busnum}");
+    let dir_walker = WalkDir::new(path_root.clone()).into_iter();
+    for entry in dir_walker.filter_entry(|e| e.file_type().is_dir()) {
+        let mut entry_path = entry?.into_path();
+        entry_path.push("devnum");
+        if let Ok(devnum_str) = fs::read_to_string(&entry_path) {
+            if devnum_str.trim().parse::<u8>().unwrap_or_default() == devnum {
+                entry_path.pop();
+                return Ok(entry_path);
+            }
+        }
+    }
+    bail!("Cannot find sysfs path for device {busnum}, {devnum}, {path_root}")
+}
+
+/// Reads the USB device information from sysfs.
+///
+/// The function reads the USB device information from sysfs, which is the kernel's view of the
+/// device. It uses the path to the device's sysfs directory and the file name to read the information.
+/// The read value is trimmed.
+fn read_sysfs_info(device_sysfs_path: &Path, file_name: &str) -> Result<String> {
+    let file_path = device_sysfs_path.join(file_name);
+    let sysfs_contents = fs::read_to_string(&file_path)
+        .with_context(|| format!("Failed to read sysfs file: {:?}", file_path))?;
+    Ok(sysfs_contents.trim().to_string())
+}
+
 /// Prints USB device information in a format similar to `lsusb -v`.
 ///
 /// The function iterates through the provided `devices` and prints detailed information about
@@ -112,6 +149,7 @@ fn print_struct_fields<W: Write>(
 fn lsusb_v<W: Write>(devices: &[UsbDeviceProto], outp_writer: &mut OutputWriter<W>) -> Result<()> {
     for device in devices {
         let (busnum, devnum) = extract_bus_dev(&device.name.clone().unwrap_or_default());
+        let device_path: PathBuf = find_sysfs_usb_path(busnum, devnum)?;
         outp_writer.print_str_indent(&format!(
             "Bus {} Device {}: ID {:04x}:{:04x} {} {}",
             busnum,
@@ -148,9 +186,19 @@ fn lsusb_v<W: Write>(devices: &[UsbDeviceProto], outp_writer: &mut OutputWriter<
                 print_aligned_string_output,
             ),
             PrintableStructField::new(
+                "speed",
+                read_sysfs_info(&device_path, "speed").map(|s| format!("{}M", s.trim())).ok(),
+                print_aligned_string_output,
+            ),
+            PrintableStructField::new(
+                "bcdUSB",
+                Some(read_sysfs_info(&device_path, "version")?),
+                print_aligned_string_output,
+            ),
+            PrintableStructField::new(
                 "num_configurations",
                 Some(configs.len().to_string()),
-                print_aligned_string_output::<W>,
+                print_aligned_string_output,
             ),
         ];
         print_struct_fields(device_fields_to_print, outp_writer)?;
