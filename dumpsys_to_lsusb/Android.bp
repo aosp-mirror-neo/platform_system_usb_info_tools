@@ -25,6 +25,7 @@ rust_defaults {
         "libframework_usb_protos_rs",
         "libprotobuf",
         "libtypec_sysfs_helper",
+        "libwalkdir",
     ],
 }
 
