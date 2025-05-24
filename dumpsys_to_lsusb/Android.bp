@@ -26,6 +26,7 @@ rust_defaults {
         "libprotobuf",
         "libtypec_sysfs_helper",
         "libwalkdir",
+        "libclap",
     ],
 }
 
