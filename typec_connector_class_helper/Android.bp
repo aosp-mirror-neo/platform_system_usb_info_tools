@@ -32,6 +32,7 @@ rust_binary {
     srcs: ["src/main.rs"],
     defaults: ["typec_connector_class_helper_defaults"],
     prefer_rlib: true,
+    vendor_available: true,
 }
 
 rust_test {
