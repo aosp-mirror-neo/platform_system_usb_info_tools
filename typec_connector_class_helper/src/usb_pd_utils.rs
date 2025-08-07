@@ -32,7 +32,7 @@ impl VdoField {
     /// Returns the "description: field_value" string for a VDO field.
     pub fn decode_vdo(&self, vdo: u32) -> String {
         let field_val: u32 = (vdo & self.mask) >> self.index;
-        [self.description, &format!(": 0x{:x}", field_val)].concat()
+        [self.description, &format!(": 0x{field_val:x}")].concat()
     }
 }
 

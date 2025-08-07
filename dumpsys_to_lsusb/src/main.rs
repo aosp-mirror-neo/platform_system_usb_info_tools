@@ -189,7 +189,7 @@ fn find_sysfs_usb_path(busnum: u8, devnum: u8) -> Result<PathBuf> {
 fn read_sysfs_info(device_sysfs_path: &Path, file_name: &str) -> Result<String> {
     let file_path = device_sysfs_path.join(file_name);
     let sysfs_contents = fs::read_to_string(&file_path)
-        .with_context(|| format!("Failed to read sysfs file: {:?}", file_path))?;
+        .with_context(|| format!("Failed to read sysfs file: {file_path:?}"))?;
     Ok(sysfs_contents.trim().to_string())
 }
 
@@ -348,7 +348,7 @@ fn lsusb_v<W: Write>(devices: &[UsbDeviceProto], outp_writer: &mut OutputWriter<
                         ),
                         PrintableStructField::new(
                             "type",
-                            endpoint_type.map(|e| format!("{:?}", e)),
+                            endpoint_type.map(|e| format!("{e:?}")),
                             print_aligned_string_output,
                         ),
                         PrintableStructField::new(
@@ -358,7 +358,7 @@ fn lsusb_v<W: Write>(devices: &[UsbDeviceProto], outp_writer: &mut OutputWriter<
                         ),
                         PrintableStructField::new(
                             "direction",
-                            endpoint_direction.map(|e| format!("{:?}", e)),
+                            endpoint_direction.map(|e| format!("{e:?}")),
                             print_aligned_string_output,
                         ),
                         PrintableStructField::new(
@@ -415,7 +415,7 @@ impl fmt::Display for UsbDeviceReprTree {
             self.driver.clone().unwrap_or_default(),
             self.speed.unwrap_or_default()
         ));
-        write!(f, "{}", output)
+        write!(f, "{output}")
     }
 }
 
@@ -514,7 +514,7 @@ fn add_device_to_hierarchy(
     for component in path_components {
         match component {
             UsbPathComponent::Bus(bus_num) => {
-                let bus_key = format!("Bus {:03}", bus_num); // current key
+                let bus_key = format!("Bus {bus_num:03}"); // current key
                 let next_node = hierarchy_ptr
                     .entry(bus_key)
                     .or_insert_with(|| HierarchyNode::Branch(HashMap::new()));
@@ -526,7 +526,7 @@ fn add_device_to_hierarchy(
                 }
             }
             UsbPathComponent::Port(port_num) => {
-                let port_key = format!("Port {:03}", port_num);
+                let port_key = format!("Port {port_num:03}");
                 let next_node = hierarchy_ptr
                     .entry(port_key)
                     .or_insert_with(|| HierarchyNode::Branch(HashMap::new()));
@@ -567,19 +567,19 @@ fn print_device_hierarchy<W: Write>(
                 // check if it is the node just above the leaf
                 if sub_hierarchy.len() == 1 && sub_hierarchy.contains_key(LEAF_KEY) {
                     if let Some(HierarchyNode::Leaf(value)) = sub_hierarchy.get(LEAF_KEY) {
-                        outp_writer.print_str_indent(&format!("{prefix}{}: {}", key, value))?;
+                        outp_writer.print_str_indent(&format!("{prefix}{key}: {value}"))?;
                     } else {
                         bail!("Malformed hierarchy {:?}", hierarchy);
                     }
                 } else {
-                    outp_writer.print_str_indent(&format!("{prefix}{}", key))?;
+                    outp_writer.print_str_indent(&format!("{prefix}{key}"))?;
                     outp_writer.indent += INDENT_STEP_TREE;
                     print_device_hierarchy(sub_hierarchy, outp_writer)?;
                     outp_writer.indent -= INDENT_STEP_TREE;
                 }
             }
             HierarchyNode::Leaf(dev_repr) => {
-                outp_writer.print_str_indent(&format!("{prefix}{}", dev_repr))?;
+                outp_writer.print_str_indent(&format!("{prefix}{dev_repr}"))?;
             }
         }
     }
@@ -595,7 +595,7 @@ fn lsusb_t<W: Write>(devices: &[UsbDeviceProto], outp_writer: &mut OutputWriter<
     for device in devices {
         let (busnum, devnum) = extract_bus_dev(&device.name.clone().unwrap_or_default());
         let mut device_path: PathBuf = find_sysfs_usb_path(busnum, devnum)?;
-        debug!("{:?}", device_path);
+        debug!("{device_path:?}");
         let device_repr = UsbDeviceReprTree {
             devnum,
             interface: None,
@@ -615,7 +615,7 @@ fn lsusb_t<W: Write>(devices: &[UsbDeviceProto], outp_writer: &mut OutputWriter<
         };
         add_device_to_hierarchy(&mut device_hierarchy, &device_path, device_repr)?;
     }
-    debug!("Constructed device hierarchy: {:?}", device_hierarchy);
+    debug!("Constructed device hierarchy: {device_hierarchy:?}");
     print_device_hierarchy(&device_hierarchy, outp_writer)?;
     Ok(())
 }
