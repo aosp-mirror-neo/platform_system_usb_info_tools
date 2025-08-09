@@ -99,7 +99,7 @@ impl<W: Write> OutputWriter<W> {
     /// Prints a string with indentation.
     pub fn print_str_indent(&mut self, str_to_print: &str) -> Result<()> {
         writeln!(self.buffer, "{:indent$}{str_to_print}", "", indent = self.indent)
-            .with_context(|| format!("{ERR_WRITE_TO_BUFFER} {:?}", str_to_print))?;
+            .with_context(|| format!("{ERR_WRITE_TO_BUFFER} {str_to_print:?}"))?;
         Ok(())
     }
 
@@ -107,7 +107,7 @@ impl<W: Write> OutputWriter<W> {
     fn print_file_formatted(&mut self, file_path: &Path) -> Result<()> {
         let file_name = get_path_basename(file_path)?;
         let file_contents = fs::read_to_string(file_path)
-            .with_context(|| format!("{ERR_READ_FILE} {:?}", file_path))?;
+            .with_context(|| format!("{ERR_READ_FILE} {file_path:?}"))?;
         let formatted_contents = file_contents
             .trim_ascii_end()
             .replace("\n", format!("\n{:indent$}", "", indent = self.indent).as_str());
@@ -117,7 +117,7 @@ impl<W: Write> OutputWriter<W> {
             "",
             indent = self.indent
         )
-        .with_context(|| format!("{ERR_WRITE_TO_BUFFER} {:?}", formatted_contents))?;
+        .with_context(|| format!("{ERR_WRITE_TO_BUFFER} {formatted_contents:?}"))?;
         Ok(())
     }
 
@@ -144,10 +144,10 @@ fn get_sorted_paths_from_dir(
     path_filter: fn(&PathBuf) -> bool,
 ) -> Result<Vec<PathBuf>> {
     let mut sorted_paths: Vec<PathBuf> = fs::read_dir(dir_path)
-        .with_context(|| format!("{ERR_READ_DIR} {:?}", dir_path))?
+        .with_context(|| format!("{ERR_READ_DIR} {dir_path:?}"))?
         .filter_map(|entry| {
             entry
-                .inspect_err(|err| warn!("{ERR_DIR_ENTRY_ACCESS} {:?}: {err}", dir_path))
+                .inspect_err(|err| warn!("{ERR_DIR_ENTRY_ACCESS} {dir_path:?}: {err}"))
                 .map(|entry| entry.path())
                 .ok()
         })
@@ -161,9 +161,9 @@ fn get_sorted_paths_from_dir(
 fn get_path_basename(path: &Path) -> Result<&str> {
     let basename = path
         .file_name()
-        .with_context(|| format!("{ERR_FILE_NAME_FROM_PATH} {:?}", path))?
+        .with_context(|| format!("{ERR_FILE_NAME_FROM_PATH} {path:?}"))?
         .to_str()
-        .with_context(|| format!("{ERR_FILE_NAME_UTF_INVALID} {:?}", path))?;
+        .with_context(|| format!("{ERR_FILE_NAME_UTF_INVALID} {path:?}"))?;
     Ok(basename)
 }
 
@@ -291,7 +291,7 @@ pub fn get_partner_product_type(partner_dir: &Path, pd_rev: PdRev) -> ProductTyp
     let id_header_vdo = match read_vdo(&id_header_vdo_path) {
         Ok(vdo) => vdo,
         Err(err) => {
-            warn!("{:#}", err);
+            warn!("{err:#}");
             return ProductType::Other;
         }
     };
@@ -376,11 +376,11 @@ pub fn print_vdo<W: Write>(
 /// Reads a file containing a 32 bit VDO value and loads it into a u32.
 pub fn read_vdo(vdo_path: &Path) -> Result<u32> {
     let vdo_str =
-        fs::read_to_string(vdo_path).with_context(|| format!("{ERR_READ_FILE} {:?}", vdo_path))?;
+        fs::read_to_string(vdo_path).with_context(|| format!("{ERR_READ_FILE} {vdo_path:?}"))?;
     let vdo_str = vdo_str.trim_ascii();
     let vdo: u32 =
         u32::from_str_radix(vdo_str.trim_start_matches("0x"), 16).with_context(|| {
-            format!("Cannot convert string read from path: {:?} to u32: {vdo_str}", vdo_path)
+            format!("Cannot convert string read from path: {vdo_path:?} to u32: {vdo_str}")
         })?;
     Ok(vdo)
 }
@@ -388,7 +388,7 @@ pub fn read_vdo(vdo_path: &Path) -> Result<u32> {
 /// Prints the immediate files in an alternate mode directory, then prints the files in each mode subdirectory.
 pub fn print_alt_mode<W: Write>(alt_mode_dir_path: &Path, out_writer: &mut OutputWriter<W>) {
     if !(alt_mode_dir_path.is_dir() | alt_mode_dir_path.is_symlink()) {
-        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", alt_mode_dir_path);
+        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {alt_mode_dir_path:?}");
         return;
     }
 
@@ -426,7 +426,7 @@ pub fn print_pdo_capabilities<W: Write>(capabilities: &Path, out_writer: &mut Ou
 /// print_pdo_capabilities to print more detailed PDO information.
 pub fn print_pdos<W: Write>(pdo_dir_path: &Path, out_writer: &mut OutputWriter<W>) {
     if !(pdo_dir_path.is_dir() | pdo_dir_path.is_symlink()) {
-        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", pdo_dir_path);
+        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {pdo_dir_path:?}");
         return;
     }
 
@@ -476,7 +476,7 @@ pub fn print_partner<W: Write>(port_path: &Path, out_writer: &mut OutputWriter<W
 pub fn get_cable_product_type(dir: &Path) -> ProductType {
     let id_header = match read_vdo(&dir.join("identity").join("id_header")) {
         Err(err) => {
-            warn!("get cable type failed to read vdo: {:#}", err);
+            warn!("get cable type failed to read vdo: {err:#}");
             return ProductType::Other;
         }
         Ok(id_header) => id_header,
@@ -518,7 +518,7 @@ pub fn get_cable_product_type(dir: &Path) -> ProductType {
 pub fn print_cable_identity<W: Write>(cable: &Path, out_writer: &mut OutputWriter<W>) {
     let mut identity = cable.join("identity");
     if !(identity.is_dir() | identity.is_symlink()) {
-        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", identity);
+        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {identity:?}");
         return;
     }
 
@@ -559,7 +559,7 @@ pub fn print_cable_identity<W: Write>(cable: &Path, out_writer: &mut OutputWrite
 /// * `out_writer` - A mutable reference to an OutputWriter for writing the output.
 pub fn print_plug_info<W: Write>(plug: &Path, out_writer: &mut OutputWriter<W>) {
     if !(plug.is_dir() | plug.is_symlink()) {
-        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", plug);
+        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {plug:?}");
         return;
     }
 
@@ -632,7 +632,7 @@ pub fn print_usb_device_info<W: Write>(usb_device: &Path, out_writer: &mut Outpu
 pub fn print_usb_device<W: Write>(usb_port: &Path, out_writer: &mut OutputWriter<W>) {
     let usb_device_dir = usb_port.join("device");
     if !(usb_device_dir.is_dir() | usb_device_dir.is_symlink()) {
-        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {:?}", usb_device_dir);
+        warn!("{ERR_PATH_NOT_DIR_OR_SYMLINK}: {usb_device_dir:?}");
         return;
     }
 
@@ -692,7 +692,7 @@ pub fn parse_dirs_and_execute<W: Write>(
     for path in get_sorted_paths_from_dir(dir_path, |path| path.is_dir() | path.is_symlink())? {
         // Assumption: all the symlinks created by the Type-C connector class point to directories.
         get_path_basename(&path)
-            .inspect_err(|err| warn!("{:#}", err))
+            .inspect_err(|err| warn!("{err:#}"))
             .is_ok_and(|file_name| re.is_match(file_name))
             .then(|| func(&path, out_writer));
     }
