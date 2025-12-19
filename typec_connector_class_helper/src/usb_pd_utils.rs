@@ -126,6 +126,50 @@ pub enum ProductType {
     Other,
 }
 
+/// Represents the USB Speed
+///
+/// refs:
+/// * USB Power Delivery R3.0 V2.0 - Table 6.35
+/// * ref: USB Power Delivery R3.2 V1.1 - Table 6.41
+/// * USB Power Delivery R2.0 V1.3 - Table 6.28
+#[derive(Debug, PartialEq, Default)]
+pub enum UsbSpeed {
+    /// USB 2.0 only speed - up to 480 Mbps.
+    Usb2Only,
+    /// USB 3.2 Gen 1 speed, up to 5 Gbps.
+    ///
+    /// Aliases (some outdated):
+    /// * USB 3.0 - SuperSpeed
+    /// * USB 3.1 Gen 1.
+    /// * USB 3.2 Gen 1x1
+    Speed5Gbps,
+    /// USB 3.2 Gen 2 speed, up to 10 Gbps.
+    ///
+    /// Aliases (some outdated):
+    /// * USB 3.1 Gen 2
+    /// * USB 3.2 Gen 2x1 - SuperspeedPlus
+    Speed10Gbps,
+    /// USB 3.2 Gen 2x2 speed or USB 4 Gen 2 speed, up to 20 Gbps.
+    ///
+    /// Aliases:
+    /// * USB 4 Gen 2x2
+    /// * USB 4 Gen 3x1
+    Speed20Gbps,
+    /// USB 4 Gen 3 speed, up to 40 Gbps.
+    ///
+    /// Aliases:
+    /// * USB 4 Gen 3x2
+    Speed40Gbps,
+    /// USB 4 Gen 4 speed, up to 80 Gbps.
+    ///
+    /// Aliases:
+    /// * USB 4 Gen 4x2
+    Speed80Gbps,
+    /// Represents an unknown or unspecified USB speed.
+    #[default]
+    Unknown,
+}
+
 /// Determines the cable's product type based on the id_header VDO value,
 /// USB PD revision and product mask.
 /// # Arguments
@@ -158,6 +202,52 @@ pub fn decode_cable_product_type(id_header: u32, pd: PdRev) -> ProductType {
     }
 
     ProductType::Other
+}
+
+/// Decodes the maximum theoretical speed supported by a cable from its VDOs.
+#[allow(dead_code)]
+pub fn decode_cable_highest_speed(
+    pd_rev: PdRev,
+    id_header_vdo: u32,
+    product_type_vdo1: u32,
+) -> UsbSpeed {
+    let ProductType::Cable(cable_type) = decode_cable_product_type(id_header_vdo, pd_rev) else {
+        return UsbSpeed::Unknown;
+    };
+
+    // The USB Speed field (bits 2:0) is in the same position for all relevant PD revisions
+    // starting from PD 2.0 in the first Product Type VDO, so we can decode it once.
+    let speed_vdo_field_decoded = pd20_data::PASSIVE_VDO[0].decode_vdo(product_type_vdo1);
+
+    match cable_type {
+        // No cable speed information in VPD_VDO
+        (CableType::Vpd, _) => UsbSpeed::Unknown,
+        (_, PdRev::Pd20) => match speed_vdo_field_decoded {
+            0b000 => UsbSpeed::Usb2Only,
+            0b001 => UsbSpeed::Speed5Gbps,
+            0b010 => UsbSpeed::Speed10Gbps,
+            _ => UsbSpeed::Unknown,
+        },
+        (_, PdRev::Pd30) => match speed_vdo_field_decoded {
+            // Note: Assumes at least PD3.0 V2.0 minor version where the USB speed
+            // is decoded the same way for passive and active cables.
+            // In PD 3.0 V1.2 there we need to use ACTIVE_VDO2 for active cables.
+            0b000 => UsbSpeed::Usb2Only,
+            0b001 => UsbSpeed::Speed5Gbps,
+            0b010 => UsbSpeed::Speed20Gbps,
+            0b011 => UsbSpeed::Speed40Gbps,
+            _ => UsbSpeed::Unknown,
+        },
+        (_, PdRev::Pd31) => match speed_vdo_field_decoded {
+            0b000 => UsbSpeed::Usb2Only,
+            0b001 => UsbSpeed::Speed5Gbps,
+            0b010 => UsbSpeed::Speed20Gbps,
+            0b011 => UsbSpeed::Speed40Gbps,
+            0b100 => UsbSpeed::Speed80Gbps,
+            _ => UsbSpeed::Unknown,
+        },
+        _ => UsbSpeed::Unknown,
+    }
 }
 
 /// Constants specific to USB PD revision 2.0.
@@ -714,5 +804,53 @@ mod tests {
 
         // Unhandled PD revision
         assert_eq!(decode_cable_product_type(passive_id_header, PdRev::None), ProductType::Other);
+    }
+
+    #[test]
+    fn test_decode_cable_highest_speed() {
+        let passive_id_header = 0x18001234;
+        let active_id_header = 0x20005678;
+        let vpd_id_header = 0x3000ABCD;
+        let other_id_header = 0x00000000;
+
+        // Non-cable product type
+        assert_eq!(
+            decode_cable_highest_speed(PdRev::Pd30, other_id_header, 0b001),
+            UsbSpeed::Unknown
+        );
+
+        // VPD cable type
+        assert_eq!(
+            decode_cable_highest_speed(PdRev::Pd31, vpd_id_header, 0b001),
+            UsbSpeed::Unknown
+        );
+
+        // PD 2.0 passive cable
+        assert_eq!(
+            decode_cable_highest_speed(PdRev::Pd20, passive_id_header, 0b000),
+            UsbSpeed::Usb2Only
+        );
+        assert_eq!(
+            decode_cable_highest_speed(PdRev::Pd20, passive_id_header, 0b001),
+            UsbSpeed::Speed5Gbps
+        );
+
+        // PD 3.0 passive cable
+        assert_eq!(
+            decode_cable_highest_speed(PdRev::Pd30, passive_id_header, 0b010),
+            UsbSpeed::Speed20Gbps
+        );
+
+        // PD 3.1 passive cable
+        assert_eq!(
+            decode_cable_highest_speed(PdRev::Pd31, passive_id_header, 0b011),
+            UsbSpeed::Speed40Gbps
+        );
+
+        // PD 3.1 active cable
+        assert_eq!(
+            decode_cable_highest_speed(PdRev::Pd31, active_id_header, 0b100),
+            UsbSpeed::Speed80Gbps
+        );
     }
 }
