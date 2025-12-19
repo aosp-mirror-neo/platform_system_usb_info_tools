@@ -29,7 +29,7 @@ use std::io::Write;
 use std::num::ParseIntError;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use typec_sysfs_helper::typec_class_utils::OutputWriter;
+use typec_pd::typec_class_utils::OutputWriter;
 use walkdir::WalkDir;
 
 const INDENT_STEP: usize = 2;

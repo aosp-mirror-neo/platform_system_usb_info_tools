@@ -30,9 +30,14 @@ pub struct VdoField {
 
 impl VdoField {
     /// Returns the "description: field_value" string for a VDO field.
-    pub fn decode_vdo(&self, vdo: u32) -> String {
-        let field_val: u32 = (vdo & self.mask) >> self.index;
+    pub fn display(&self, vdo: u32) -> String {
+        let field_val = self.decode_vdo(vdo);
         [self.description, &format!(": 0x{field_val:x}")].concat()
+    }
+
+    /// Decodes the field value from a VDO.
+    pub fn decode_vdo(&self, vdo: u32) -> u32 {
+        (vdo & self.mask) >> self.index
     }
 }
 
@@ -47,9 +52,10 @@ pub const UFP_PRODUCT_TYPE_MASK: u32 = 0x38000000;
 pub const DFP_PRODUCT_TYPE_MASK: u32 = 0x03800000;
 
 /// Represents the USB Power Delivery (PD) revision.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Default, Clone, Copy)]
 pub enum PdRev {
     /// Represents an unknown or unspecified PD revision.
+    #[default]
     None,
     /// Represents the PD 2.0 revision.
     Pd20,
@@ -118,6 +124,40 @@ pub enum ProductType {
     Port((PortType, PdRev)),
     /// Represents a product of an unspecified or unknown type.
     Other,
+}
+
+/// Determines the cable's product type based on the id_header VDO value,
+/// USB PD revision and product mask.
+/// # Arguments
+/// * `id_header` - The value of the "id_header" VDO.
+/// * `pd` - The USB PD revision of the cable.
+/// # Returns
+/// * `ProductType` - The determined product type of the cable.
+pub fn decode_cable_product_type(id_header: u32, pd: PdRev) -> ProductType {
+    let prod_mask = id_header & UFP_PRODUCT_TYPE_MASK;
+
+    // All USB PD 3.1/3.0/2.0 support passive cables.
+    if pd == PdRev::Pd20 && prod_mask == pd20_data::PASSIVE_CABLE_COMP
+        || pd == PdRev::Pd30 && prod_mask == pd30_data::PASSIVE_CABLE_COMP
+        || pd == PdRev::Pd31 && prod_mask == pd31_data::PASSIVE_CABLE_COMP
+    {
+        return ProductType::Cable((CableType::Passive, pd));
+    }
+
+    // All USB PD 3.1/3.0/2.0 support active cables.
+    if pd == PdRev::Pd20 && prod_mask == pd20_data::ACTIVE_CABLE_COMP
+        || pd == PdRev::Pd30 && prod_mask == pd30_data::ACTIVE_CABLE_COMP
+        || pd == PdRev::Pd31 && prod_mask == pd31_data::ACTIVE_CABLE_COMP
+    {
+        return ProductType::Cable((CableType::Active, pd));
+    }
+
+    // Since USB PD 3.1 Vconn Powered Devices (VPD) are also supported.
+    if pd == PdRev::Pd31 && prod_mask == pd31_data::VPD_COMP {
+        return ProductType::Cable((CableType::Vpd, pd));
+    }
+
+    ProductType::Other
 }
 
 /// Constants specific to USB PD revision 2.0.
@@ -444,6 +484,7 @@ pub mod pd31_data {
     ///
     /// ref: USB Power Delivery R3.1 V1.8, Section 6.4.4.3.1.1.3 Product Type (UFP), Table 6-34 Product Types (UFP), Row: PDUSB Peripheral
     pub const PERIPHERAL_COMP: u32 = 0x10000000;
+
     /// Indicates a product is a PDUSB Hub's Downstream Facing Port
     ///
     /// ref: USB Power Delivery R3.1 V1.8, Section 6.4.4.3.1.1.6 Product Type (DFP), Table 6-36 Product Types (DFP), Row: PDUSB Hub
@@ -609,14 +650,69 @@ pub mod pd31_data {
 mod tests {
     use super::*;
 
+    const TEST_FIELD: VdoField = VdoField {
+        index: 4,
+        mask: 0x000000f0,
+        description: "Value of the 2nd least significant byte",
+    };
+
     #[test]
     fn test_decode_vdo() {
         let vdo: u32 = 0x12341234;
-        let field = VdoField {
-            index: 4,
-            mask: 0x000000f0,
-            description: "Value of the 2nd least significant byte",
-        };
-        assert_eq!(field.decode_vdo(vdo), "Value of the 2nd least significant byte: 0x3")
+        assert_eq!(TEST_FIELD.decode_vdo(vdo), 0x3);
+    }
+
+    #[test]
+    fn test_display_vdo() {
+        let vdo: u32 = 0x12341234;
+        assert_eq!(TEST_FIELD.display(vdo), "Value of the 2nd least significant byte: 0x3");
+    }
+
+    #[test]
+    fn test_decode_cable_product_type() {
+        let passive_id_header = 0x18001234;
+        let active_id_header = 0x20005678;
+        let vpd_id_header = 0x3000ABCD;
+        let other_id_header = 0x00000000;
+
+        // PD 2.0
+        assert_eq!(
+            decode_cable_product_type(passive_id_header, PdRev::Pd20),
+            ProductType::Cable((CableType::Passive, PdRev::Pd20))
+        );
+        assert_eq!(
+            decode_cable_product_type(active_id_header, PdRev::Pd20),
+            ProductType::Cable((CableType::Active, PdRev::Pd20))
+        );
+        assert_eq!(decode_cable_product_type(other_id_header, PdRev::Pd20), ProductType::Other);
+
+        // PD 3.0
+        assert_eq!(
+            decode_cable_product_type(passive_id_header, PdRev::Pd30),
+            ProductType::Cable((CableType::Passive, PdRev::Pd30))
+        );
+        assert_eq!(
+            decode_cable_product_type(active_id_header, PdRev::Pd30),
+            ProductType::Cable((CableType::Active, PdRev::Pd30))
+        );
+        assert_eq!(decode_cable_product_type(other_id_header, PdRev::Pd30), ProductType::Other);
+
+        // PD 3.1
+        assert_eq!(
+            decode_cable_product_type(passive_id_header, PdRev::Pd31),
+            ProductType::Cable((CableType::Passive, PdRev::Pd31))
+        );
+        assert_eq!(
+            decode_cable_product_type(active_id_header, PdRev::Pd31),
+            ProductType::Cable((CableType::Active, PdRev::Pd31))
+        );
+        assert_eq!(
+            decode_cable_product_type(vpd_id_header, PdRev::Pd31),
+            ProductType::Cable((CableType::Vpd, PdRev::Pd31))
+        );
+        assert_eq!(decode_cable_product_type(other_id_header, PdRev::Pd31), ProductType::Other);
+
+        // Unhandled PD revision
+        assert_eq!(decode_cable_product_type(passive_id_header, PdRev::None), ProductType::Other);
     }
 }

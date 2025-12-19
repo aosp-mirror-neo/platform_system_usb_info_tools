@@ -211,7 +211,7 @@ pub fn print_identity<W: Write>(dev_path: &Path, out_writer: &mut OutputWriter<W
             ("cert_stat", pd31_data::CERT_STAT_VDO),
             ("product", pd31_data::PRODUCT_VDO),
         ],
-        PdRev::None => &[("id_header", &[]), ("cert_stat", &[]), ("product", &[])],
+        _ => &[("id_header", &[]), ("cert_stat", &[]), ("product", &[])],
     };
     print_decoded_vdos_from_files(
         &mut dev_path.join("identity"),
@@ -367,7 +367,7 @@ pub fn print_vdo<W: Write>(
     out_writer.print_str_indent(&vdo_str).warn_err();
     out_writer.indent += INDENT_STEP;
     for vdo_field in vdo_description {
-        out_writer.print_str_indent(&vdo_field.decode_vdo(vdo)).warn_err(); // log error but continue iterating.
+        out_writer.print_str_indent(&vdo_field.display(vdo)).warn_err(); // log error but continue iterating.
     }
     out_writer.indent -= INDENT_STEP;
     Ok(())
@@ -473,7 +473,7 @@ pub fn print_partner<W: Write>(port_path: &Path, out_writer: &mut OutputWriter<W
 /// * `dir` - A reference to the Path of the cable's directory.
 /// # Returns
 /// * `ProductType` - The determined product type of the cable.
-pub fn get_cable_product_type(dir: &Path) -> ProductType {
+pub fn read_cable_product_type(dir: &Path) -> ProductType {
     let id_header = match read_vdo(&dir.join("identity").join("id_header")) {
         Err(err) => {
             warn!("get cable type failed to read vdo: {err:#}");
@@ -483,30 +483,7 @@ pub fn get_cable_product_type(dir: &Path) -> ProductType {
     };
 
     let pd = get_pd_revision(dir);
-    let prod_mask = id_header & UFP_PRODUCT_TYPE_MASK;
-
-    // All USB PD 3.1/3.0/2.0 support passive cables.
-    if pd == PdRev::Pd20 && prod_mask == pd20_data::PASSIVE_CABLE_COMP
-        || pd == PdRev::Pd30 && prod_mask == pd30_data::PASSIVE_CABLE_COMP
-        || pd == PdRev::Pd31 && prod_mask == pd31_data::PASSIVE_CABLE_COMP
-    {
-        return ProductType::Cable((CableType::Passive, pd));
-    }
-
-    // All USB PD 3.1/3.0/2.0 support active cables.
-    if pd == PdRev::Pd20 && prod_mask == pd20_data::ACTIVE_CABLE_COMP
-        || pd == PdRev::Pd30 && prod_mask == pd30_data::ACTIVE_CABLE_COMP
-        || pd == PdRev::Pd31 && prod_mask == pd31_data::ACTIVE_CABLE_COMP
-    {
-        return ProductType::Cable((CableType::Active, pd));
-    }
-
-    // USB PD 3.1 also supports Vconn Powered Devices (VPD).
-    if pd == PdRev::Pd31 && prod_mask == pd31_data::VPD_COMP {
-        return ProductType::Cable((CableType::Vpd, pd));
-    }
-
-    ProductType::Other
+    decode_cable_product_type(id_header, pd)
 }
 
 /// Prints the identity information of a USB cable.
@@ -526,7 +503,7 @@ pub fn print_cable_identity<W: Write>(cable: &Path, out_writer: &mut OutputWrite
 
     out_writer.indent += INDENT_STEP;
 
-    let vdos: [&[VdoField]; 3] = match get_cable_product_type(cable) {
+    let vdos: [&[VdoField]; 3] = match read_cable_product_type(cable) {
         ProductType::Cable(cable_type) => match cable_type {
             (CableType::Passive, PdRev::Pd20) => [pd20_data::PASSIVE_VDO, &[], &[]],
             (CableType::Active, PdRev::Pd20) => [pd20_data::ACTIVE_VDO, &[], &[]],
