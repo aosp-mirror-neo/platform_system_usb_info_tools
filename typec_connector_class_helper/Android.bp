@@ -46,8 +46,9 @@ rust_test {
 }
 
 rust_library {
-    name: "libtypec_sysfs_helper",
-    crate_name: "typec_sysfs_helper",
+    name: "libtypec_pd",
+    crate_name: "typec_pd",
     srcs: ["src/lib.rs"],
     defaults: ["typec_connector_class_helper_defaults"],
+    vendor_available: true,
 }

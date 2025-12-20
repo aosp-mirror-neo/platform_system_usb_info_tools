@@ -24,7 +24,7 @@ rust_defaults {
         "libanyhow",
         "libframework_usb_protos_rs",
         "libprotobuf",
-        "libtypec_sysfs_helper",
+        "libtypec_pd",
         "libwalkdir",
         "libclap",
     ],

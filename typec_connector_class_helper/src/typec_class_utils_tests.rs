@@ -336,14 +336,14 @@ fn test_print_pdos() {
 }
 
 #[test]
-fn test_get_cable_product_type() {
+fn test_read_cable_product_type() {
     let temp_dir_path = create_temp_dir_with_dirs_files_content(&[
         ("port0-cable", &[("usb_power_delivery_revision", "3.0")]),
         ("port0-cable/identity", &[("id_header", "0x1c6003f0")]),
     ]);
     let expected_outp: ProductType = ProductType::Cable((CableType::Passive, PdRev::Pd30));
 
-    let prod_type = get_cable_product_type(&temp_dir_path.join("port0-cable"));
+    let prod_type = read_cable_product_type(&temp_dir_path.join("port0-cable"));
 
     assert_eq!(prod_type, expected_outp)
 }
