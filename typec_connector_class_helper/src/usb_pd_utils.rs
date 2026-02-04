@@ -132,7 +132,7 @@ pub enum ProductType {
 /// * USB Power Delivery R3.0 V2.0 - Table 6.35
 /// * ref: USB Power Delivery R3.2 V1.1 - Table 6.41
 /// * USB Power Delivery R2.0 V1.3 - Table 6.28
-#[derive(Debug, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default, Clone, Copy)]
 pub enum UsbSpeed {
     /// USB 2.0 only speed - up to 480 Mbps.
     Usb2Only,
@@ -147,7 +147,7 @@ pub enum UsbSpeed {
     ///
     /// Aliases (some outdated):
     /// * USB 3.1 Gen 2
-    /// * USB 3.2 Gen 2x1 - SuperspeedPlus
+    /// * USB 3.2 Gen 2x1 - SuperSpeedPlus
     Speed10Gbps,
     /// USB 3.2 Gen 2x2 speed or USB 4 Gen 2 speed, up to 20 Gbps.
     ///
@@ -248,6 +248,110 @@ pub fn decode_cable_highest_speed(
         },
         _ => UsbSpeed::Unknown,
     }
+}
+
+/// Decodes the Vendor ID and Product ID from the ID Header VDO and Product VDO.
+///
+/// # Returns
+/// * `(u32, u32)` - The Vendor ID and Product ID.
+#[allow(dead_code)]
+pub fn get_vid_pid(id_header_vdo: u32, product_vdo: u32) -> (u32, u32) {
+    (
+        pd20_data::ID_HEADER_VDO[0].decode_vdo(id_header_vdo),
+        pd20_data::PRODUCT_VDO[1].decode_vdo(product_vdo),
+    )
+}
+
+/// Determines if the partner supports USB.
+///
+/// # Arguments
+/// * `id_header_vdo` - The value of the "id_header" VDO from the partner.
+/// # Returns
+/// * `bool` - True if the partner supports USB, false otherwise.
+#[allow(dead_code)]
+pub fn get_partner_supports_usb(id_header_vdo: u32) -> bool {
+    let supports_device = pd20_data::ID_HEADER_VDO[4].decode_vdo(id_header_vdo) != 0;
+    let supports_host = pd20_data::ID_HEADER_VDO[5].decode_vdo(id_header_vdo) != 0;
+    supports_device || supports_host
+}
+
+/// Determines if the partner supports USB4, based on the USB PD 3.1 specification.
+///
+/// # Arguments
+/// * `id_header_vdo` - The value of the partner's "id_header" VDO.
+/// * `product_type_vdo1` - The value of the first product type VDO from the partner.
+/// # Returns
+/// * `bool` - True if the partner supports USB4, false otherwise.
+#[allow(dead_code)]
+pub fn get_partner_supports_usb4(id_header_vdo: u32, product_type_vdo1: u32) -> bool {
+    // A partner can be a Downstream Facing Port (DFP) or an Upstream Facing Port (UFP).
+    // We check its product type from the ID Header VDO to determine which it is,
+    // and then check for USB4 capability in its respective first Product Type VDO.
+    let dfp_product_type = pd31_data::ID_HEADER_VDO[3].decode_vdo(id_header_vdo);
+    let ufp_product_type = pd31_data::ID_HEADER_VDO[5].decode_vdo(id_header_vdo);
+
+    // Check UFP first. If UFP type is set (even if DRD), VDO1 is the UFP VDO [5].
+    // ref: USB Power Delivery R3.1 V2.0, section 6.4.4.3.1 Discover Identity, Paragraph 11 (Page 155).
+    if ufp_product_type != 0 {
+        // Partner is UFP.
+        let device_capability_value = pd31_data::UFP_VDO[7].decode_vdo(product_type_vdo1);
+        device_capability_value == pd31_data::UFP_USB4_CAPABILITY_VALUE
+    } else if dfp_product_type != 0 {
+        // Partner is DFP.
+        let host_capability_value = pd31_data::DFP_VDO[3].decode_vdo(product_type_vdo1);
+        host_capability_value == pd31_data::DFP_USB4_CAPABILITY_VALUE
+    } else {
+        // Not a recognized UFP or DFP product type.
+        false
+    }
+}
+
+/// Determines if the cable is an active cable.
+///
+/// # Arguments
+/// * `id_header_vdo` - The value of the cable's "id_header" VDO.
+/// # Returns
+/// * `bool` - True if the cable is active, false otherwise.
+#[allow(dead_code)]
+pub fn is_active_cable(id_header_vdo: u32, pd_rev: PdRev) -> bool {
+    matches!(
+        decode_cable_product_type(id_header_vdo, pd_rev),
+        ProductType::Cable((CableType::Active, _))
+    )
+}
+
+/// Determines if the cable is captive based on the USB PD 3.1 specification.
+///
+/// # Arguments
+/// * `product_type_vdo1` - The value of the cable's first product type VDO.
+/// # Returns
+/// * `bool` - True if the cable is captive, false otherwise.
+#[allow(dead_code)]
+pub fn is_captive_cable(product_type_vdo1: u32) -> bool {
+    // According to the USB PD 3.1 spec, Table 6-41 (Passive Cable VDO) and Table 6-42 (Active Cable VDO 1),
+    // bits 19..18 indicate the connector type. A value of 3 (0b11) signifies a captive cable.
+    // This field is identical for both passive and active cables, so we can use either VDO definition.
+    pd31_data::PASSIVE_VDO[8].decode_vdo(product_type_vdo1) == 3
+}
+
+/// Determines if the cable is a TBT3 only cable based on USB Type-C Spec revision 2.4
+///
+/// # Arguments
+/// * `tbt_vdo` - The value of the TBT VDO.
+/// # Returns
+/// * `bool` - True if the cable is a TBT3 only cable, false otherwise.
+#[allow(dead_code)]
+pub fn is_tbt3_only_cable(cable_speed: UsbSpeed, tbt_vdo: u32) -> bool {
+    // TBT only cables supporting 10Gbps or 20Gbps speeds are TBT3 Active Re-timer cables
+    // that only support USB2.0 and TBT.
+    //
+    // We identify them by checking the TBT3 discovery VDO (from USB Type-C Spec R2.4, Table F-11).
+    if cable_speed != UsbSpeed::Usb2Only {
+        // TBT-only cables report a Cable highest speed of USB 2.0.
+        return false;
+    }
+    let cable_speed = typec24_data::TBT3_SOP_PRIME_VDO[1].decode_vdo(tbt_vdo);
+    cable_speed == typec24_data::TBT3_ONLY_10G_20G_CABLE_SPEED_VALUE
 }
 
 /// Constants specific to USB PD revision 2.0.
@@ -408,6 +512,12 @@ pub mod pd30_data {
     ///
     /// ref: USB Power Delivery R3.0 V2.0, Section 6.4.4.3.1.1 ID Header VDO, Table 6-29 ID Header VDO, Row: B29..27
     pub const ACTIVE_CABLE_COMP: u32 = 0x20000000;
+
+    /// Indicates a UFP partner is USB4 capable
+    ///
+    /// ref: USB Power Delivery R3.0 V2.0, Section 6.4.4.3.1.4 UFP VDOs, Table 6-35 UFP VDO 1, Row 27..24
+    #[allow(dead_code)]
+    pub const USB4_CAPABILITY_MASK: u32 = 0x8;
 
     /// Contains information about the product, including its vendor ID, product type, and USB capabilities.
     ///
@@ -602,6 +712,16 @@ pub mod pd31_data {
     /// ref: USB Power Delivery R3.1 V1.8, Section 6.4.4.3.1.1.4 Product Type (Cable Plug), Table 6-35 Product Types (Cable Plug/VPD), Row: VCONN Powered USB Device
     pub const VPD_COMP: u32 = 0x30000000;
 
+    /// Indicates a UFP partner is USB4 device capable.
+    ///
+    /// ref: USB Power Delivery R3.1 V1.8, Section 6.4.4.3.1.4 UFP VDO, Table 6-39 UFP VDO, Row: B27..24
+    pub const UFP_USB4_CAPABILITY_VALUE: u32 = 3;
+
+    /// Indicates a DFP partner is USB4 host capable.
+    ///
+    /// ref: USB Power Delivery R3.1 V1.8, Section 6.4.4.3.1.5 DFP VDO, Table 6-40 DFP VDO, Row: B26..24.
+    pub const DFP_USB4_CAPABILITY_VALUE: u32 = 2;
+
     /// Contains information about the product, including its vendor ID, product type, and USB capabilities.
     ///
     /// ref: USB Power Delivery R3.1 V1.8, Section 6.4.4.3.1.1 ID Header VDO, Table 6-33 ID Header VDO
@@ -670,7 +790,11 @@ pub mod pd31_data {
         VdoField { index: 11, mask: 0x00001800, description: "Cable Termination Type" },
         VdoField { index: 13, mask: 0x0001e000, description: "Cable Latency" },
         VdoField { index: 17, mask: 0x00020000, description: "EPR Mode Cable" },
-        VdoField { index: 18, mask: 0x000c0000, description: "USB Type-C Plug to USB Type" },
+        VdoField {
+            index: 18,
+            mask: 0x000c0000,
+            description: "USB Type-C Plug to USB Type-C/Captive",
+        },
         VdoField { index: 20, mask: 0x00100000, description: "Reserved" },
         VdoField { index: 21, mask: 0x00e00000, description: "VDO Version" },
         VdoField { index: 24, mask: 0x0f000000, description: "Firmware Version" },
@@ -733,6 +857,30 @@ pub mod pd31_data {
         VdoField { index: 21, mask: 0x00e00000, description: "VDO Version" },
         VdoField { index: 24, mask: 0x0f000000, description: "Firmware Version" },
         VdoField { index: 28, mask: 0xf0000000, description: "HW Version" },
+    ];
+}
+
+/// Constants specific to USB Type-C specification revision 3.1.
+///
+/// ref: USB Type-C Specification Release 2.4
+pub mod typec24_data {
+    use super::VdoField;
+    /// Indicates that the cable speed is 10 Gbps and 20 Gbps (TBT 3rd Gen active cables and 20 Gbps passive cables)
+    ///
+    /// ref: USB Type-C Specification Release 2.4, Section F.2.6 TBT3 Cable Discover Modes Responses, Table F-11 TBT3 Cable Discover Mode VDO Responses, Row B18..16
+    pub const TBT3_ONLY_10G_20G_CABLE_SPEED_VALUE: u32 = 0b011;
+
+    /// Contains information helping to decode a TBT3 SOP' VDO.
+    ///
+    /// ref: USB Type-C Specification Release 2.4, Section F.2.6 TBT3 Cable Discover Modes Responses, Table F-11 TBT3 Cable Discover Mode VDO Responses
+    pub const TBT3_SOP_PRIME_VDO: &[VdoField] = &[
+        VdoField { index: 0, mask: 0x0000ffff, description: "TBT Alternate Mode" },
+        VdoField { index: 16, mask: 0x00070000, description: "Cable Speed" },
+        VdoField { index: 19, mask: 0x00180000, description: "TBT_Rounded_Support" },
+        VdoField { index: 21, mask: 0x00200000, description: "Cable Type" },
+        VdoField { index: 22, mask: 0x00400000, description: "Re-timer" },
+        VdoField { index: 23, mask: 0x00800000, description: "Active Cable Plug Link Training" },
+        VdoField { index: 25, mask: 0x02000000, description: "Active_Passive" },
     ];
 }
 
@@ -852,5 +1000,94 @@ mod tests {
             decode_cable_highest_speed(PdRev::Pd31, active_id_header, 0b100),
             UsbSpeed::Speed80Gbps
         );
+    }
+
+    #[test]
+    fn test_get_vid_pid() {
+        let id_header_vdo = 0x12345678;
+        let product_vdo = 0xABCDDCBA;
+        assert_eq!(get_vid_pid(id_header_vdo, product_vdo), (0x5678, 0xABCD));
+    }
+
+    #[test]
+    fn test_get_partner_supports_usb() {
+        assert!(get_partner_supports_usb(0x40000000)); // Device only
+        assert!(get_partner_supports_usb(0x80000000)); // Host only
+        assert!(get_partner_supports_usb(0xC0000000)); // Both
+        assert!(!get_partner_supports_usb(0x3FFFFFFF)); // Neither
+    }
+
+    #[test]
+    fn test_get_partner_supports_usb4() {
+        // Test values based on pd31_data definitions.
+        const UFP_ID_HEADER: u32 = 1 << 27;
+        const DFP_ID_HEADER: u32 = 1 << 23;
+        const DRD_ID_HEADER: u32 = UFP_ID_HEADER | DFP_ID_HEADER;
+
+        const UFP_VDO1_SUPPORTS_USB4: u32 = pd31_data::UFP_USB4_CAPABILITY_VALUE << 24;
+        const UFP_VDO1_NO_USB4: u32 = (pd31_data::UFP_USB4_CAPABILITY_VALUE - 1) << 24;
+
+        const DFP_VDO1_SUPPORTS_USB4: u32 = pd31_data::DFP_USB4_CAPABILITY_VALUE << 24;
+        const DFP_VDO1_NO_USB4: u32 = (pd31_data::DFP_USB4_CAPABILITY_VALUE - 1) << 24;
+
+        // UFP partner that supports USB4
+        assert!(get_partner_supports_usb4(UFP_ID_HEADER, UFP_VDO1_SUPPORTS_USB4));
+
+        // UFP partner that does not support USB4
+        assert!(!get_partner_supports_usb4(UFP_ID_HEADER, UFP_VDO1_NO_USB4));
+
+        // DFP partner that supports USB4
+        assert!(get_partner_supports_usb4(DFP_ID_HEADER, DFP_VDO1_SUPPORTS_USB4));
+
+        // DFP partner that does not support USB4
+        assert!(!get_partner_supports_usb4(DFP_ID_HEADER, DFP_VDO1_NO_USB4));
+
+        // DRD partner that supports USB4 (acts as UFP)
+        assert!(get_partner_supports_usb4(DRD_ID_HEADER, UFP_VDO1_SUPPORTS_USB4));
+
+        // DRD partner that does not support USB4
+        assert!(!get_partner_supports_usb4(DRD_ID_HEADER, UFP_VDO1_NO_USB4));
+
+        // Not a UFP or DFP partner
+        assert!(!get_partner_supports_usb4(0, 0));
+    }
+
+    #[test]
+    fn test_is_active_cable() {
+        let active_id_header = 0x20005678;
+        let passive_id_header = 0x18001234;
+        let other_id_header = 0x00000000;
+
+        assert!(is_active_cable(active_id_header, PdRev::Pd20));
+        assert!(is_active_cable(active_id_header, PdRev::Pd31));
+        assert!(!is_active_cable(passive_id_header, PdRev::Pd30));
+        assert!(!is_active_cable(other_id_header, PdRev::Pd31));
+    }
+
+    #[test]
+    fn test_is_captive_cable() {
+        // Bits 19:18 are 3 (0b11) for captive
+        let captive_vdo = 3 << 18;
+        let not_captive_vdo = 2 << 18;
+
+        assert!(is_captive_cable(captive_vdo));
+        assert!(!is_captive_cable(not_captive_vdo));
+        assert!(!is_captive_cable(0));
+    }
+
+    #[test]
+    fn test_is_tbt3_only_cable() {
+        // TBT3 only cable reports USB2.0 speed and has a specific TBT VDO value.
+        let tbt3_vdo = typec24_data::TBT3_ONLY_10G_20G_CABLE_SPEED_VALUE << 16;
+        let non_tbt3_vdo = 0;
+
+        // Not a USB 2.0 cable, so can't be a TBT3 only cable.
+        assert!(!is_tbt3_only_cable(UsbSpeed::Speed5Gbps, tbt3_vdo));
+
+        // USB 2.0 cable with correct TBT VDO.
+        assert!(is_tbt3_only_cable(UsbSpeed::Usb2Only, tbt3_vdo));
+
+        // USB 2.0 cable with incorrect TBT VDO.
+        assert!(!is_tbt3_only_cable(UsbSpeed::Usb2Only, non_tbt3_vdo));
     }
 }
