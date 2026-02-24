@@ -275,6 +275,17 @@ pub fn get_partner_supports_usb(id_header_vdo: u32) -> bool {
     supports_device || supports_host
 }
 
+/// Determines if the partner supports USB host mode.
+///
+/// # Arguments
+/// * `id_header_vdo` - The value of the "id_header" VDO from the partner.
+/// # Returns
+/// * `bool` - True if the partner reports USB host capability, false otherwise.
+#[allow(dead_code)]
+pub fn get_partner_supports_usb_host(id_header_vdo: u32) -> bool {
+    pd20_data::ID_HEADER_VDO[5].decode_vdo(id_header_vdo) != 0
+}
+
 /// Determines if the partner supports USB4, based on the USB PD 3.1 specification.
 ///
 /// # Arguments
@@ -1089,5 +1100,21 @@ mod tests {
 
         // USB 2.0 cable with incorrect TBT VDO.
         assert!(!is_tbt3_only_cable(UsbSpeed::Usb2Only, non_tbt3_vdo));
+    }
+
+    #[test]
+    fn test_get_partner_supports_usb_host() {
+        // According to the USB PD spec, bit 31 of the ID Header VDO indicates USB Host capability.
+        const USB_HOST_CAPABLE_VDO: u32 = 1 << 31;
+        // Test case where partner is a USB host.
+        assert!(get_partner_supports_usb_host(USB_HOST_CAPABLE_VDO));
+
+        // Test case where partner is not a USB host.
+        assert!(!get_partner_supports_usb_host(0));
+
+        // Test with other arbitrary bits set.
+        const OTHER_BITS: u32 = 0xAAAAAAAA;
+        assert!(get_partner_supports_usb_host(USB_HOST_CAPABLE_VDO | OTHER_BITS));
+        assert!(!get_partner_supports_usb_host(OTHER_BITS & !USB_HOST_CAPABLE_VDO));
     }
 }
